@@ -514,3 +514,30 @@ def test_first_open_shows_a_contract_even_when_the_first_contractor_has_none(qt_
     service.contractor_choices = lambda: [first, *choices()]
     screen = ContractorExtractsScreen(service)
     assert screen.contract_id == 100
+
+
+def test_the_first_contract_approved_for_another_contractor_opens_after_a_reload(qt_app, monkeypatch):
+    """Review fix: a fresh database opens on contractor index 0 with nothing to show; that
+    default is not the user's pick, so B's first approved contract must open on reload."""
+    for name in ("information", "warning", "critical"):
+        monkeypatch.setattr(screen_module.QMessageBox, name, lambda *a, **k: None)
+    service = FakeService()
+    real = service.contract_choices
+    service.contract_choices = lambda contractor_id=None: []  # no approved contract yet
+    screen = ContractorExtractsScreen(service)
+    assert screen.contract_id is None
+    service.contract_choices = lambda contractor_id=None: [
+        c for c in real(contractor_id) if c["contractor_id"] == 2]  # contractor 2's contract approved
+    screen.reload_lists()
+    assert screen.contract_id == 101
+
+
+def test_a_contract_unapproved_elsewhere_is_closed_on_reload(screen, monkeypatch):
+    """Review fix: a draft contract must not stay open (a new extract could be saved on it)."""
+    assert screen.contract_id == 100
+    real = screen.service.contract_choices
+    monkeypatch.setattr(screen.service, "contract_choices",
+                        lambda contractor_id=None: [c for c in real(contractor_id) if c["contract_id"] != 100])
+    screen.reload_lists()
+    assert screen.contract_id is None
+    assert screen.contractor_picker.currentData() == 1  # still on its contractor

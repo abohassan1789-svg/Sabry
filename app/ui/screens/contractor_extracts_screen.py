@@ -522,6 +522,9 @@ class ContractorExtractsScreen(QWidget):
         self.current_record: dict[str, Any] | None = None
         self.mode = "view"
         self._cards: dict[Any, QPushButton] = {}
+        # A contractor the user picked who has no contract open (index 0 shown by
+        # default is not a pick): a reload stays on him.
+        self._picked_contractor: Any = None
 
         self._perm_create = SESSION.can(f"{PERMISSION_BASE}.create")
         self._perm_edit = SESSION.can(f"{PERMISSION_BASE}.edit")
@@ -918,24 +921,25 @@ class ContractorExtractsScreen(QWidget):
         except Exception as exc:
             self._show_error("تعذّر تحميل العقود", exc)
             contractors, contracts = [], []
+        contract_id = self.contract_id
         # The open contract's contractor; with no contract, the one the user picked.
-        previous = self.contractor_picker.currentData()
-        contractor_id = (self.contract or {}).get("contractor_id") or previous
+        keep = (self.contract or {}).get("contractor_id") or self._picked_contractor
+        if contract_id is not None and contract_id not in {c["contract_id"] for c in contracts}:
+            # Unapproved or deleted elsewhere: only approved contracts stay open.
+            contract_id = None
         self._fill_combo(self.contractor_picker, contractors,
-                         lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id",
-                         contractor_id)
+                         lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id", keep)
         self._fill_combo(self.contract_picker_b, contracts,
                          lambda r: f"{r['contract_no']} — {r['contractor_name']} — {r['project_name']}",
-                         "contract_id", self.contract_id)
-        contract_id = self.contract_id
+                         "contract_id", contract_id)
         if contract_id is None:
-            picked = self.contractor_picker.currentData()
-            mine = [c for c in contracts if c["contractor_id"] == picked]
-            # Only a contractor the user really had picked (not index 0 by default).
-            if previous is not None and picked == previous and not mine:
+            listed = keep is not None and any(r["contractor_id"] == keep for r in contractors)
+            mine = [c for c in contracts if c["contractor_id"] == keep] if listed else []
+            if mine or not listed:
+                contract_id = (mine or contracts or [{"contract_id": None}])[0]["contract_id"]
+            else:
+                self._picked_contractor = keep
                 self._fill_contract_picker_a([], None)  # still on him, no contract yet
-            elif mine or contracts:
-                contract_id = (mine or contracts)[0]["contract_id"]
         self.mode = "view"
         self.set_contract(contract_id, keep_extract=self.current_id)
 
@@ -950,6 +954,7 @@ class ContractorExtractsScreen(QWidget):
 
     def _on_contractor_picked(self, _index: int) -> None:
         contractor_id = self.contractor_picker.currentData()
+        self._picked_contractor = contractor_id  # a real pick: programmatic fills block signals
         try:
             contracts = self.service.contract_choices(contractor_id)
         except Exception:
@@ -975,6 +980,8 @@ class ContractorExtractsScreen(QWidget):
             self._show_error("تعذّر تحميل العقد", exc)
             self.contract, self.extract_rows = None, []
         self.contract_id = self.contract["contract_id"] if self.contract else None
+        if self.contract:
+            self._picked_contractor = None  # the open contract decides the contractor now
 
         # Keep all three pickers on this contract.
         if self.contract:
