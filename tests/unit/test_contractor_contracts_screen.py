@@ -394,3 +394,52 @@ def test_the_buttons_are_off_while_editing(screen):
     screen.edit_record()
     assert not screen.approval.approve_button.isEnabled()
     assert not screen.approval.unapprove_button.isEnabled()
+
+
+# --- القوايم في باقي الشاشات (user request 2026-10-02) ----------------------------------------
+
+def test_saving_announces_a_change(screen, data_changes):
+    screen.load_contract(101)
+    screen.edit_record()
+    screen.save_record()
+    assert data_changes == [screen]
+
+
+def test_cancel_announces_nothing(screen, data_changes):
+    screen.load_contract(101)
+    screen.edit_record()
+    screen.cancel_edit()
+    assert data_changes == []
+
+
+def test_delete_and_approve_announce_a_change(screen, data_changes):
+    screen.load_contract(101)
+    screen.approve_record()
+    screen.load_contract(102)
+    screen.delete_record()
+    assert data_changes == [screen, screen]
+
+
+def test_reload_lists_shows_a_contractor_approved_elsewhere(screen, monkeypatch):
+    screen.load_contract(101)
+    extra = {"contractor_id": 9, "contractor_code": "A-H/CD-1009", "contractor_name": "مقاول جديد"}
+    choices = screen.service.contractor_choices
+    monkeypatch.setattr(screen.service, "contractor_choices", lambda: [*choices(), extra])
+    screen.reload_lists()
+    assert screen.tree_form.contractor.findData(9) >= 0
+    assert screen.current_id == 101  # the open contract stays open
+
+
+def test_reload_lists_keeps_the_tree_scroll_position(screen):
+    """Review fix: a reload must not jump the tree back to the top."""
+    screen.show()
+    screen.tree.setFixedHeight(70)
+    QApplication.processEvents()
+    bar = screen.tree.verticalScrollBar()
+    assert bar.maximum() > 0, "the fake tree must be taller than the box"
+    screen.load_contract(102)  # a contract low in the tree
+    bar.setValue(0)  # the user scrolled back up to look at something else
+    screen.reload_lists()
+    QApplication.processEvents()
+    assert bar.value() == 0
+    screen.hide()

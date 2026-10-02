@@ -528,6 +528,15 @@ class ContractorsScreen(BaseCrudScreen):
         # Runs after every save/delete too, since both end in refresh_table.
         self._refresh_counts()
 
+    def reload_lists(self) -> None:
+        """Data changed on another PC: reload the list, keeping the open contractor."""
+        if self.mode in {"new", "edit"}:
+            return
+        current = self.current_id
+        self.refresh_table()
+        if current is not None:
+            self._select_row_by_id(current)
+
     def _select_row_by_id(self, record_id: Any) -> None:
         for row in range(self.table.rowCount()):
             item = self.table.item(row, 0)

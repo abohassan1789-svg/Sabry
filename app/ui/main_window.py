@@ -30,6 +30,7 @@ from app.services.auth_service import AuthService
 from app.services.permission_service import PermissionService
 from app.services.permissions_sync_service import PermissionsSyncService
 from app.services.review_data_service import ReviewDataService, TABLE_SPECS
+from app.ui.common.live_lists import LiveLists
 from app.ui.common.theme import GREEN, GREEN_DARK
 from app.ui.screens.attachments_page import AttachmentsPage
 from app.ui.screens.backup_screen import BackupManagementScreen
@@ -319,6 +320,8 @@ class ReviewMainWindow(QMainWindow):
         self.auth_service = AuthService(self.security_repo)
         self.permission_service = PermissionService(self.security_repo)
         self.sync_service = PermissionsSyncService(self.security_repo)
+        # Refreshes the other open screens' lists after a save/approve (user request 2026-10-02).
+        self.live_lists = LiveLists(self)
 
         self.open_windows: dict[str, QWidget] = {}
         self.nav_buttons: list[QPushButton] = []
@@ -772,6 +775,7 @@ class ReviewMainWindow(QMainWindow):
         window.setLayoutDirection(Qt.RightToLeft)
         window.destroyed.connect(lambda *_a, k=key: self.open_windows.pop(k, None))
         self.open_windows[key] = window
+        self.live_lists.register(window)
         return window
 
     def open_screen(self, key: str) -> None:
@@ -790,6 +794,8 @@ class ReviewMainWindow(QMainWindow):
             refresh = getattr(window, "refresh_dashboard", None)
             if callable(refresh):
                 refresh()
+            # Reopened from the sidebar: reload its lists (also catches other PCs' changes).
+            self.live_lists.opened(window)
         window.showMaximized()
         window.raise_()
         window.activateWindow()

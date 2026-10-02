@@ -22,6 +22,7 @@ from PySide6.QtWidgets import QHBoxLayout, QLabel, QMessageBox, QPushButton, QSt
 
 from app.security.session_context import SESSION
 from app.services.contracting_approval import APPROVED, DRAFT, STATUS_LABELS, ApprovalError
+from app.ui.common.live_lists import notify_data_changed
 from app.ui.common.theme import _button_style
 
 DRAFT_COLOR, DRAFT_TINT = "#B45309", "#FEF3C7"
@@ -141,6 +142,7 @@ class ApprovalControls:
         except Exception as exc:  # a database error: shown, never raised into Qt
             QMessageBox.critical(self.screen, title, str(exc))
             return False
+        notify_data_changed(self.screen)
         return True
 
     @staticmethod

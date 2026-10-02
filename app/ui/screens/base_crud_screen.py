@@ -55,6 +55,7 @@ from app.ui.common.theme import (
     _button_style,
 )
 from app.ui.dialogs.record_lookup_dialog import RecordLookupDialog
+from app.ui.common.live_lists import notify_data_changed
 
 
 # Tawrid data-entry screens that replace the base's scrollable form panel with a
@@ -907,6 +908,7 @@ class BaseCrudScreen(QWidget):
             self.set_mode("view")
             self.refresh_table()
             self._select_row_by_id(saved_id)
+            notify_data_changed(self)
             QMessageBox.information(self, "تم الحفظ", self._saved_message())
         except Exception as exc:
             self._show_error("فشل حفظ البيانات", exc)
@@ -947,6 +949,7 @@ class BaseCrudScreen(QWidget):
             self._clear_form()
             self.refresh_table()
             self.set_mode("view")
+            notify_data_changed(self)
         except Exception as exc:
             self._show_error("لا يمكن حذف السجل", exc)
 

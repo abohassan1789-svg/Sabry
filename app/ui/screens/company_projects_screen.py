@@ -48,6 +48,7 @@ from app.services import contracting_approval as approval
 from app.services.company_project_service import CompanyProjectError, CompanyProjectService
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.screens.approval_controls import ApprovalControls, status_chip
+from app.ui.common.live_lists import notify_data_changed
 
 PERMISSION_BASE = "contracting.company_projects"
 BLUE = "#0369A1"
@@ -502,6 +503,12 @@ class CompanyProjectsScreen(QWidget):
             return
         self._load("project", project_id)
 
+    def reload_lists(self) -> None:
+        """Data changed in another screen (or on another PC): rebuild the tree."""
+        if self.mode in {"new", "edit"}:
+            return
+        self.refresh_tree()
+
     def _load(self, kind: str, record_id: Any) -> None:
         try:
             record = (self.service.get_company if kind == "company" else self.service.get_project)(record_id)
@@ -663,6 +670,7 @@ class CompanyProjectsScreen(QWidget):
         self.mode = "view"
         self.refresh_tree()
         self._load(kind, saved)
+        notify_data_changed(self)
         QMessageBox.information(self, "تم الحفظ", self.approval.saved_message(
             self._status(), "الشركة" if kind == "company" else "المشروع"))
 
@@ -696,6 +704,7 @@ class CompanyProjectsScreen(QWidget):
             return
         self._show_empty()
         self.refresh_tree()
+        notify_data_changed(self)
 
     # -- اعتماد / إلغاء الاعتماد ----------------------------------------------------
 

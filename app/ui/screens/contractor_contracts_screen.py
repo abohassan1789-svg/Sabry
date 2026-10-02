@@ -57,6 +57,7 @@ from app.services.contractor_contract_service import (
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
+from app.ui.common.live_lists import notify_data_changed
 
 PERMISSION_BASE = "contracting.contractor_contracts"
 BLUE = "#0369A1"
@@ -913,6 +914,18 @@ class ContractorContractsScreen(QWidget):
         elif self.mode == "view":
             self._show_empty()
 
+    def reload_lists(self) -> None:
+        """Data changed in another screen: refill the lists, keeping the open contract.
+
+        The tree keeps its scroll position: the rebuild would jump it to the top.
+        """
+        if self.mode in {"new", "edit"}:
+            return
+        bar = self.tree.verticalScrollBar()
+        position = bar.value()
+        self.refresh_all()
+        bar.setValue(position)
+
     def refresh_views(self) -> None:
         self.search_timer.stop()
         try:
@@ -1015,6 +1028,7 @@ class ContractorContractsScreen(QWidget):
         self.current_id = saved
         self.refresh_views()
         self.load_contract(saved)
+        notify_data_changed(self)
         QMessageBox.information(self, "تم الحفظ", self.approval.saved_message(self._status(), "العقد"))
 
     def cancel_edit(self) -> None:
@@ -1044,6 +1058,7 @@ class ContractorContractsScreen(QWidget):
             return
         self._show_empty()
         self.refresh_views()
+        notify_data_changed(self)
 
     # -- اعتماد / إلغاء الاعتماد ------------------------------------------------------------
 

@@ -325,3 +325,14 @@ def test_a_new_contractor_is_saved_as_a_draft(screen):
     assert screen.approval.badge.isHidden()
     screen.current_id, screen.mode = 3, "view"
     assert "كمسودة" in screen._saved_message()
+
+
+# --- القوايم في باقي الشاشات (user request 2026-10-02) ----------------------------------------
+
+def test_saving_and_approving_a_contractor_announce_a_change(screen, data_changes):
+    screen.new_record()
+    screen.inputs["contractor_name"].setText("مقاول جديد")
+    screen.save_record()
+    _open(screen, 2)
+    screen.approve_record()
+    assert data_changes == [screen, screen]

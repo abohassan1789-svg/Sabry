@@ -650,3 +650,36 @@ def test_approving_a_draft_payment(screen):
     _with_draft(screen)
     screen.approve_record()
     assert screen.service.approved == [902]
+
+
+# --- القوايم في باقي الشاشات (user request 2026-10-02) ----------------------------------------
+
+def test_saving_and_deleting_announce_a_change(admin_screen, data_changes):
+    screen = admin_screen
+    screen.edit_record()
+    screen.save_record()
+    screen.delete_record()
+    assert data_changes == [screen, screen]
+
+
+def test_reload_lists_refreshes_the_contractor_list(screen, monkeypatch):
+    extra = {"contractor_id": 9, "contractor_code": "A-H/CD-1009", "contractor_name": "مقاول جديد"}
+    choices = screen.service.contractor_choices
+    monkeypatch.setattr(screen.service, "contractor_choices", lambda: [*choices(), extra])
+    screen.reload_lists()
+    assert screen.board_contractor.findData(9) >= 0
+
+
+def test_reload_lists_keeps_the_tree_scroll_position(screen):
+    """Review fix: a reload must not jump the tree back to the top."""
+    screen.show()
+    screen.tree.setFixedHeight(70)
+    QApplication.processEvents()
+    bar = screen.tree.verticalScrollBar()
+    assert bar.maximum() > 0, "the fake tree must be taller than the box"
+    bar.setValue(bar.maximum())
+    kept = bar.value()
+    screen.reload_lists()
+    QApplication.processEvents()
+    assert bar.value() == kept
+    screen.hide()

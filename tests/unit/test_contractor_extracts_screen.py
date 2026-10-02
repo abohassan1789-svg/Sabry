@@ -467,3 +467,25 @@ def test_an_admin_may_edit_an_approved_extract(screen):
     screen.approval.is_admin = True
     screen.set_mode("view")
     assert screen.edit_button.isEnabled() and screen.delete_button.isEnabled()
+
+
+# --- القوايم في باقي الشاشات (user request 2026-10-02) ----------------------------------------
+
+def test_saving_and_deleting_announce_a_change(draft_screen, data_changes):
+    screen = draft_screen
+    screen.edit_record()
+    screen.save_record()
+    screen.delete_record()
+    assert data_changes == [screen, screen]
+
+
+def test_reload_lists_refreshes_the_pickers_but_never_mid_edit(screen, monkeypatch):
+    extra = {"contractor_id": 9, "contractor_code": "A-H/CD-1009", "contractor_name": "مقاول جديد"}
+    choices = screen.service.contractor_choices
+    monkeypatch.setattr(screen.service, "contractor_choices", lambda: [*choices(), extra])
+    screen.new_extract()
+    screen.reload_lists()  # «جديد»: untouched, and no «احفظ التعديلات» popup
+    assert screen.mode == "new" and screen.contractor_picker.findData(9) < 0
+    screen.cancel_edit()
+    screen.reload_lists()
+    assert screen.contractor_picker.findData(9) >= 0

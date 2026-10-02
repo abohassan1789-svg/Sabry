@@ -63,6 +63,7 @@ from app.services.contractor_extract_service import (
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.dialogs.contractor_extract_picker import ContractorExtractPickerDialog
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
+from app.ui.common.live_lists import notify_data_changed
 from app.ui.screens.contractor_contracts_screen import (
     _COMBO_QSS,
     _EDITOR_QSS,
@@ -929,6 +930,15 @@ class ContractorExtractsScreen(QWidget):
         self.mode = "view"
         self.set_contract(contract_id, keep_extract=self.current_id)
 
+    def reload_lists(self) -> None:
+        """Data changed in another screen: refill the lists, keeping the selection.
+
+        Never mid-edit: refresh_all would stop on «احفظ التعديلات أو ألغِها الأول».
+        """
+        if self.mode in {"new", "edit"}:
+            return
+        self.refresh_all()
+
     def _on_contractor_picked(self, _index: int) -> None:
         contractor_id = self.contractor_picker.currentData()
         try:
@@ -1183,6 +1193,7 @@ class ContractorExtractsScreen(QWidget):
             return
         self.mode = "view"
         self.set_contract(data["contract_id"], keep_extract=saved)
+        notify_data_changed(self)
         QMessageBox.information(self, "تم الحفظ", self.approval.saved_message(self._status(), "المستخلص"))
 
     def cancel_edit(self) -> None:
@@ -1209,6 +1220,7 @@ class ContractorExtractsScreen(QWidget):
             return
         self.current_id = None
         self.set_contract(self.contract_id)
+        notify_data_changed(self)
 
     # -- اعتماد / إلغاء الاعتماد ------------------------------------------------------------------
 

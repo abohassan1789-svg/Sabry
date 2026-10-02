@@ -22,7 +22,7 @@ _t2.json
 # Local data, secrets and build output — never published (2026-10-02)
 Backups/
 restore_*/
-config/
+/config/
 installer_final/
 installer_new/
 installer/prereq/

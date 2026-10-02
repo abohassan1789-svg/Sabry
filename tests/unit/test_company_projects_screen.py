@@ -267,3 +267,21 @@ def test_an_admin_deletes_an_approved_project(screen):
     assert screen.delete_button.isEnabled()
     screen.delete_record()
     assert screen.service.deleted == [("project", 10)]
+
+
+# --- القوايم في باقي الشاشات (user request 2026-10-02) ----------------------------------------
+
+def test_saving_and_deleting_a_project_announce_a_change(screen, data_changes):
+    screen.select_company(1)
+    screen.new_project()
+    screen.project_name.setText("مدرسة النور")
+    screen.save_record()
+    screen.select_project(11)
+    screen.delete_record()
+    assert data_changes == [screen, screen]
+
+
+def test_a_refused_delete_does_not_announce_a_change(screen, data_changes):
+    screen.select_company(1)  # still has projects
+    screen.delete_record()
+    assert data_changes == []

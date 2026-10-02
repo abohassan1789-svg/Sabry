@@ -430,3 +430,7 @@ class ContractingReportBase(QWidget):
     def refresh_all(self) -> None:
         self.load_choices()
         self.run_report()
+
+    def reload_lists(self) -> None:
+        """Data changed in another screen: refill the filters (keeping the picks) and rerun."""
+        self.refresh_all()

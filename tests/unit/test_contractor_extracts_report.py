@@ -294,3 +294,13 @@ def test_filters_and_rerun_leave_no_stale_rows(screen):
     assert _kinds(screen) == [ROW_GROUP, ROW_EXTRACT, ROW_SUBTOTAL, ROW_TOTAL]
     assert screen.card_values["works_value"].text() == "620,000.00"
     assert screen.table.rowCount() == 4
+
+
+def test_reload_lists_refreshes_the_filters_and_keeps_the_pick(screen, monkeypatch):
+    screen.contractor_combo.setCurrentIndex(screen.contractor_combo.findData(1))
+    extra = {"contractor_id": 9, "contractor_code": "D9", "contractor_name": "مقاول جديد"}
+    choices = screen.service.contractor_choices
+    monkeypatch.setattr(screen.service, "contractor_choices", lambda: [*choices(), extra])
+    screen.reload_lists()
+    assert screen.contractor_combo.findData(9) >= 0
+    assert screen.contractor_combo.currentData() == 1

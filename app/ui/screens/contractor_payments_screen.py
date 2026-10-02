@@ -81,6 +81,7 @@ from app.services.contractor_payment_service import (
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.dialogs.contractor_payment_picker import ContractorPaymentPickerDialog
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix
+from app.ui.common.live_lists import notify_data_changed
 from app.ui.screens.contractor_contracts_screen import (
     _COMBO_QSS,
     _EDITOR_QSS,
@@ -756,6 +757,19 @@ class ContractorPaymentsScreen(QWidget):
             self.select(contractor, self.company_id, self.project_id,
                         self.extract_id if self.project_id is not None else AUTO)
 
+    def reload_lists(self) -> None:
+        """Data changed in another screen: refill the lists, keeping the selection.
+
+        Never mid-edit: refresh_all would stop on «احفظ التعديلات أو ألغِها الأول».
+        The tree keeps its scroll position: the rebuild would jump it to the top.
+        """
+        if self.mode in {"new", "edit"}:
+            return
+        bar = self.tree.verticalScrollBar()
+        position = bar.value()
+        self.refresh_all()
+        bar.setValue(position)
+
     def _reload_data(self) -> None:
         try:
             self.contractors = self.service.contractor_choices()
@@ -1201,6 +1215,7 @@ class ContractorPaymentsScreen(QWidget):
         self.mode = "view"
         self._reload_data()
         self.load_payment(saved)
+        notify_data_changed(self)
         QMessageBox.information(self, "تم الحفظ", self.approval.saved_message(self._status(), "الدفعة"))
 
     def cancel_edit(self) -> None:
@@ -1236,6 +1251,7 @@ class ContractorPaymentsScreen(QWidget):
         self._reload_data()
         self.select(self.contractor_id, self.company_id, self.project_id,
                     self.extract_id if self.project_id is not None else AUTO)
+        notify_data_changed(self)
 
     # -- اعتماد / إلغاء الاعتماد ---------------------------------------------------------------------
 
