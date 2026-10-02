@@ -489,3 +489,28 @@ def test_reload_lists_refreshes_the_pickers_but_never_mid_edit(screen, monkeypat
     screen.cancel_edit()
     screen.reload_lists()
     assert screen.contractor_picker.findData(9) >= 0
+
+
+def test_reload_keeps_a_picked_contractor_who_has_no_contracts_yet(screen, monkeypatch):
+    """Review fix: the reload used to jump to the first contractor and contract."""
+    extra = {"contractor_id": 9, "contractor_code": "A-H/CD-1009", "contractor_name": "مقاول جديد"}
+    choices = screen.service.contractor_choices
+    monkeypatch.setattr(screen.service, "contractor_choices", lambda: [*choices(), extra])
+    screen.reload_lists()
+    screen.contractor_picker.setCurrentIndex(screen.contractor_picker.findData(9))
+    assert screen.contract_id is None
+    screen.reload_lists()
+    assert screen.contractor_picker.currentData() == 9
+    assert screen.contract_id is None
+
+
+def test_first_open_shows_a_contract_even_when_the_first_contractor_has_none(qt_app, monkeypatch):
+    """Review fix: keeping «the picked contractor» must not apply to index 0 picked by default."""
+    for name in ("information", "warning", "critical"):
+        monkeypatch.setattr(screen_module.QMessageBox, name, lambda *a, **k: None)
+    service = FakeService()
+    first = {"contractor_id": 9, "contractor_code": "A-H/CD-1000", "contractor_name": "بدون عقود"}
+    choices = service.contractor_choices
+    service.contractor_choices = lambda: [first, *choices()]
+    screen = ContractorExtractsScreen(service)
+    assert screen.contract_id == 100

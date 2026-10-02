@@ -808,12 +808,14 @@ class ContractorContractsScreen(QWidget):
                 label.setText("—")
 
         while self.cards_grid.count():
-            item = self.cards_grid.takeAt(0)
-            if item.widget() is not None:
+            # Hold the widget: after setParent(None) an unreferenced one (the
+            # «no contractor» caption) is gone and the item returns None.
+            widget = self.cards_grid.takeAt(0).widget()
+            if widget is not None:
                 # Detach first: a deleteLater() card stays painted until the
                 # event loop runs, overlapping the new ones.
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+                widget.setParent(None)
+                widget.deleteLater()
         self._cards = {}
         if contractor_id is None:
             empty = _caption("أضف المقاولين من شاشة «المقاولين» أولاً.", 15, "#94A3B8")

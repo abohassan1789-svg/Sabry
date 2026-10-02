@@ -74,6 +74,9 @@ class LiveLists(QObject):
     def is_stale(self, window: QWidget) -> bool:
         return self._has(self._stale, window)
 
+    def is_registered(self, window: QWidget) -> bool:
+        return self._has(self._windows, window)
+
     def retry(self) -> None:
         for window in list(self._waiting):
             if not is_editing(window):

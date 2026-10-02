@@ -918,15 +918,24 @@ class ContractorExtractsScreen(QWidget):
         except Exception as exc:
             self._show_error("تعذّر تحميل العقود", exc)
             contractors, contracts = [], []
+        # The open contract's contractor; with no contract, the one the user picked.
+        previous = self.contractor_picker.currentData()
+        contractor_id = (self.contract or {}).get("contractor_id") or previous
         self._fill_combo(self.contractor_picker, contractors,
                          lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id",
-                         (self.contract or {}).get("contractor_id"))
+                         contractor_id)
         self._fill_combo(self.contract_picker_b, contracts,
                          lambda r: f"{r['contract_no']} — {r['contractor_name']} — {r['project_name']}",
                          "contract_id", self.contract_id)
         contract_id = self.contract_id
-        if contract_id is None and contracts:
-            contract_id = contracts[0]["contract_id"]
+        if contract_id is None:
+            picked = self.contractor_picker.currentData()
+            mine = [c for c in contracts if c["contractor_id"] == picked]
+            # Only a contractor the user really had picked (not index 0 by default).
+            if previous is not None and picked == previous and not mine:
+                self._fill_contract_picker_a([], None)  # still on him, no contract yet
+            elif mine or contracts:
+                contract_id = (mine or contracts)[0]["contract_id"]
         self.mode = "view"
         self.set_contract(contract_id, keep_extract=self.current_id)
 
@@ -1020,10 +1029,11 @@ class ContractorExtractsScreen(QWidget):
 
         # tab 8: the cards
         while self.cards_grid.count():
-            item = self.cards_grid.takeAt(0)
-            if item.widget() is not None:
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            # Hold the widget: after setParent(None) the item no longer returns it.
+            widget = self.cards_grid.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         self._cards = {}
         if not has:
             empty = _caption("أضف عقد من شاشة «عقود المقاولين» أولاً، أو اختار مقاول له عقود.", 15, "#94A3B8")

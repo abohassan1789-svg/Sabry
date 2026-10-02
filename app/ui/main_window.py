@@ -794,11 +794,12 @@ class ReviewMainWindow(QMainWindow):
             refresh = getattr(window, "refresh_dashboard", None)
             if callable(refresh):
                 refresh()
-            # Reopened from the sidebar: reload its lists (also catches other PCs' changes).
-            self.live_lists.opened(window)
         window.showMaximized()
         window.raise_()
         window.activateWindow()
+        if is_existing_window:
+            # Reopened from the sidebar: reload its lists (also catches other PCs' changes).
+            self.live_lists.opened(window)
         self._highlight(key)
 
     def _highlight(self, key: str) -> None:

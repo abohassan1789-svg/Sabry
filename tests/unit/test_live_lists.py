@@ -36,6 +36,9 @@ def live(qt_app):
     manager = LiveLists()
     yield manager
     manager.deleteLater()
+    # processEvents() never runs deferred deletes at top level: flush them, or the
+    # manager outlives the test and keeps reacting to DATA_EVENTS in later tests.
+    QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
 
 
 def test_a_stale_window_reloads_once_when_activated(live):
@@ -129,6 +132,8 @@ def test_a_closed_window_is_forgotten(live, qt_app):
     live.register(contracts)
     contracts.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    assert not live.is_registered(contracts)  # dropped as soon as it was destroyed
+    assert live.is_registered(contractors)
     notify_data_changed(contractors)  # must not touch the deleted window
     assert contractors.reloads == 0
 

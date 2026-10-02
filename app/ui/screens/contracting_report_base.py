@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QMenu,
+    QMessageBox,
     QPushButton,
     QStyle,
     QTableWidget,
@@ -432,5 +433,12 @@ class ContractingReportBase(QWidget):
         self.run_report()
 
     def reload_lists(self) -> None:
-        """Data changed in another screen: refill the filters (keeping the picks) and rerun."""
-        self.refresh_all()
+        """Data changed in another screen: refill the filters (keeping the picks) and rerun.
+
+        A database error is shown, never raised: on a sidebar open it would leave
+        the button looking dead.
+        """
+        try:
+            self.refresh_all()
+        except Exception as exc:  # noqa: BLE001 - shown to the user, never raised into Qt
+            QMessageBox.critical(self, "تعذّر تحديث التقرير", str(exc))

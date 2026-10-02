@@ -336,3 +336,15 @@ def test_saving_and_approving_a_contractor_announce_a_change(screen, data_change
     _open(screen, 2)
     screen.approve_record()
     assert data_changes == [screen, screen]
+
+
+def test_delete_all_announces_a_change(screen, data_changes, monkeypatch):
+    """Review fix: the admin «حذف الكل» must refresh the other screens too."""
+    from app.ui.screens import base_crud_screen
+
+    screen._perm_delete_all = True
+    monkeypatch.setattr(base_crud_screen.QMessageBox, "warning",
+                        lambda *a, **k: base_crud_screen.QMessageBox.Ok)
+    monkeypatch.setattr(screen.service, "delete_all_records", lambda spec: 2, raising=False)
+    screen.delete_all_records()
+    assert data_changes == [screen]

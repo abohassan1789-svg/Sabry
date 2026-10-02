@@ -304,3 +304,18 @@ def test_reload_lists_refreshes_the_filters_and_keeps_the_pick(screen, monkeypat
     screen.reload_lists()
     assert screen.contractor_combo.findData(9) >= 0
     assert screen.contractor_combo.currentData() == 1
+
+
+def test_reload_lists_reports_a_database_error_instead_of_raising(screen, monkeypatch):
+    """Review fix: a reload on sidebar open must not escape as an exception (button seems dead)."""
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: shown.append(a[1:3]))
+
+    def down():
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(screen.service, "contractor_choices", down)
+    screen.reload_lists()
+    assert shown and "database is down" in shown[0][1]

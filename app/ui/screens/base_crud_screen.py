@@ -992,6 +992,7 @@ class BaseCrudScreen(QWidget):
         self._clear_form()
         self.refresh_table()
         self.set_mode("view")
+        notify_data_changed(self)
         QMessageBox.information(
             self,
             "تم الحذف",

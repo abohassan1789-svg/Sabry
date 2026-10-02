@@ -443,3 +443,16 @@ def test_reload_lists_keeps_the_tree_scroll_position(screen):
     QApplication.processEvents()
     assert bar.value() == 0
     screen.hide()
+
+
+def test_reload_after_the_first_contractor_is_approved_does_not_crash(qt_app, monkeypatch):
+    """Review fix: rebuilding the contractor tab crashed on its «no contractor» caption."""
+    for name in ("information", "warning", "critical"):
+        monkeypatch.setattr(screen_module.QMessageBox, name, lambda *a, **k: None)
+    service = FakeService()
+    real = service.contractor_choices
+    service.contractor_choices = lambda: []  # a fresh database: nobody approved yet
+    screen = ContractorContractsScreen(service)
+    service.contractor_choices = real  # one approved in «المقاولين»
+    screen.reload_lists()
+    assert screen.contractor_picker.count() == len(CONTRACTORS)
