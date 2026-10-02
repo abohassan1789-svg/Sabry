@@ -1,0 +1,174 @@
+"""Data and arithmetic for تقرير كشف حساب مقاول (نموذج 10, 2026-10-02).
+
+One contractor's account over a period, from three screens: المقاولين (the
+typed «الرصيد الجاري»)، المستخلصات and دفعات المقاولين.
+
+* The first line is رصيد أول المدة = الرصيد الجاري + صافي المستخلصات − الدفعات
+  dated before «من» (with «كل الفترات» it is the الرصيد الجاري alone).
+* Then the period's extracts and payments by date (an extract before a payment on
+  the same day). An extract line carries every amount of ``extract_amounts``; a
+  payment line only «التحصيلات / الدفعات».
+* الرصيد التراكمي = الرصيد السابق + صافي المستخلص − التحصيلات (user, 2026-10-02).
+* «الضرائب الخاصة» is the extract's نسبة الضريبة (VAT) and its amount, إجمالي
+  المستخلص − صافي الأعمال; it is not deducted from الصافي.
+
+The contract figures (user, 2026-10-02): the contractor's contracts' value, the
+advance they grant (value × نسبة المقدمة), the advance taken back on their
+extracts up to «إلى», and what is left of it.
+
+The company / project filters narrow the contracts, extracts and payments; the
+typed الرصيد الجاري is the contractor's and always counts.
+
+Approved records only (مسودة / معتمد, 2026-10-02): a draft contractor has no
+statement, and draft contracts, extracts and payments are left out.
+"""
+
+from __future__ import annotations
+
+import datetime
+from typing import Any
+
+from app.services.contractor_contract_service import to_decimal
+from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
+from app.services.contractor_extract_service import extract_amounts
+
+KIND_EXTRACT, KIND_PAYMENT = "extract", "payment"
+
+RATE_KEYS = ("withholding_tax_pct", "advance_payment_pct", "vat_pct", "works_insurance_pct", "social_insurance_pct")
+# Amounts on an extract line (``extract_amounts`` keys), all summed in the totals.
+EXTRACT_AMOUNT_KEYS = ("works_value", "withholding_tax", "before_tax", "advance_payment", "vat_amount",
+                       "works_insurance", "social_insurance", "other_deductions", "net")
+AMOUNT_KEYS = EXTRACT_AMOUNT_KEYS + ("paid",)
+
+
+def _day(value: Any) -> datetime.date | None:
+    if isinstance(value, datetime.datetime):
+        return value.date()
+    return value if isinstance(value, datetime.date) else None
+
+
+def extract_line(extract: dict[str, Any]) -> dict[str, Any]:
+    amounts = extract_amounts(extract)
+    line = {**extract, "kind": KIND_EXTRACT, "date": _day(extract.get("extract_date")), "paid": ZERO}
+    line.update({key: to_decimal(extract.get(key)) for key in RATE_KEYS})
+    line.update({key: amounts[key] for key in EXTRACT_AMOUNT_KEYS})
+    return line
+
+
+def payment_line(payment: dict[str, Any]) -> dict[str, Any]:
+    line = {**payment, "kind": KIND_PAYMENT, "date": _day(payment.get("payment_date")),
+            "paid": _money(to_decimal(payment.get("amount")))}
+    line.update({key: ZERO for key in EXTRACT_AMOUNT_KEYS})
+    return line
+
+
+def _sort_key(line: dict[str, Any]) -> tuple:
+    date = line["date"] or datetime.date.min
+    if line["kind"] == KIND_EXTRACT:
+        return date, 0, str(line.get("extract_no") or ""), line.get("extract_id") or 0
+    return date, 1, "", line.get("payment_id") or 0
+
+
+def build_statement(current_balance: Any, extracts: list[dict[str, Any]], payments: list[dict[str, Any]],
+                    date_from: Any = None, date_to: Any = None) -> dict[str, Any]:
+    """``{opening, lines, totals}`` for one contractor.
+
+    *extracts* / *payments* may hold any dates: those before *date_from* go into
+    the opening balance, those after *date_to* are left out.
+    """
+    opening = _money(to_decimal(current_balance))
+    lines = []
+    for line in [extract_line(x) for x in extracts] + [payment_line(p) for p in payments]:
+        day = line["date"]
+        if date_to is not None and day is not None and day > date_to:
+            continue
+        if date_from is not None and day is not None and day < date_from:
+            opening += line["net"] - line["paid"]
+            continue
+        lines.append(line)
+    lines.sort(key=_sort_key)
+    balance = opening
+    for line in lines:
+        balance += line["net"] - line["paid"]
+        line["balance"] = balance
+    totals: dict[str, Any] = {key: sum((line[key] for line in lines), ZERO) for key in AMOUNT_KEYS}
+    totals.update(opening=opening, balance=balance,
+                  extracts_count=sum(1 for line in lines if line["kind"] == KIND_EXTRACT),
+                  payments_count=sum(1 for line in lines if line["kind"] == KIND_PAYMENT))
+    return {"opening": opening, "lines": lines, "totals": totals}
+
+
+def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, Any]],
+                     date_to: Any = None) -> dict[str, Any]:
+    """The contracts' value and advance, and how much of it the extracts up to *date_to* took back."""
+    value = sum((_money(to_decimal(c.get("contract_value"))) for c in contracts), ZERO)
+    agreed = sum((_money(_money(to_decimal(c.get("contract_value"))) * to_decimal(c.get("advance_payment_pct")) / 100)
+                  for c in contracts), ZERO)
+    taken = [x for x in extracts if date_to is None or (_day(x.get("extract_date")) or date_to) <= date_to]
+    deducted = sum((extract_amounts(x)["advance_payment"] for x in taken), ZERO)
+    return {
+        "count": len(contracts),
+        "contract_value": value,
+        "advance_agreed": agreed,
+        # The overall rate: the advance over the contracts' value.
+        "advance_pct": agreed / value * 100 if value > 0 else ZERO,
+        "advance_deducted": deducted,
+        "remaining_advance": agreed - deducted,
+    }
+
+
+def empty_statement() -> dict[str, Any]:
+    statement = build_statement(0, [], [])
+    statement["contracts"] = contract_advance([], [])
+    return statement
+
+
+class ContractorStatementReportService(ContractorContractsReportService):
+    """The filter choices are the contracts report's; ``statement`` needs a contractor."""
+
+    def statement(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
+                  project_id: Any = None, contractor_id: Any = None) -> dict[str, Any]:
+        if contractor_id in (None, ""):
+            return empty_statement()
+        row = self._db.fetch_one(
+            "SELECT current_balance FROM contractors WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
+        )
+        if row is None:
+            return empty_statement()
+        where, params = ["k.contractor_id = %s"], [contractor_id]
+        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id)):
+            if value not in (None, ""):
+                where.append(clause)
+                params.append(value)
+        contracts = self._db.fetch_all(
+            "SELECT k.contract_id, k.contract_value, k.advance_payment_pct FROM contractor_contracts k "
+            "JOIN company_projects p ON p.project_id = k.project_id "
+            "WHERE k.status = 'approved' AND " + " AND ".join(where),
+            params,
+        )
+        extracts = self._db.fetch_all(
+            "SELECT x.extract_id, x.extract_no, x.extract_date, x.contract_id, x.works_value, x.vat_pct, "
+            "x.advance_payment_pct, x.withholding_tax_pct, x.works_insurance_pct, x.social_insurance_pct, "
+            "x.other_deductions, d.contractor_name "
+            "FROM contractor_extracts x "
+            "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
+            "JOIN contractors d ON d.contractor_id = k.contractor_id "
+            "JOIN company_projects p ON p.project_id = k.project_id "
+            "WHERE x.status = 'approved' AND k.status = 'approved' AND " + " AND ".join(where),
+            params,
+        )
+        payment_where = [w.replace("k.contractor_id", "y.contractor_id").replace("k.project_id", "y.project_id")
+                         for w in where]
+        payments = self._db.fetch_all(
+            "SELECT y.payment_id, y.payment_date, y.amount, y.payment_method, y.reference_no, y.extract_id, "
+            "x.extract_no, d.contractor_name "
+            "FROM contractor_payments y "
+            "JOIN contractors d ON d.contractor_id = y.contractor_id "
+            "JOIN company_projects p ON p.project_id = y.project_id "
+            "LEFT JOIN contractor_extracts x ON x.extract_id = y.extract_id "
+            "WHERE y.status = 'approved' AND " + " AND ".join(payment_where),
+            params,
+        )
+        statement = build_statement(row.get("current_balance"), extracts, payments, date_from, date_to)
+        statement["contracts"] = contract_advance(contracts, extracts, date_to)
+        return statement

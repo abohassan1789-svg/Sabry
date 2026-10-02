@@ -1,0 +1,38 @@
+.env
+.pytest_cache/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.spec
+*.log
+app/logs/
+daily_followup_report_settings.json
+daily_followup_smart_report_exports/
+
+# Installer build artifacts
+installer/dist/
+installer/build/
+installer/Output/
+installer/.buildvenv/
+_test_conn.json
+_cloud.json
+_t2.json
+
+# Local data, secrets and build output — never published (2026-10-02)
+Backups/
+restore_*/
+config/
+installer_final/
+installer_new/
+installer/prereq/
+installer/assets/data/
+*.pdf
+*.bat
+whatsapp_settings.json
+backup_settings.json
+customers_template.xlsx
+.superpowers/
+
+# Access export with real customer data
+app/database/migrations/.tmp_access_export/
