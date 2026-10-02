@@ -541,3 +541,13 @@ def test_a_contract_unapproved_elsewhere_is_closed_on_reload(screen, monkeypatch
     screen.reload_lists()
     assert screen.contract_id is None
     assert screen.contractor_picker.currentData() == 1  # still on its contractor
+
+
+def test_no_open_contract_leaves_the_contract_list_unselected(screen, monkeypatch):
+    """Review fix: with no contract open, the «all contracts» list must not show another one."""
+    real = screen.service.contract_choices
+    monkeypatch.setattr(screen.service, "contract_choices",
+                        lambda contractor_id=None: [c for c in real(contractor_id) if c["contract_id"] != 100])
+    screen.reload_lists()
+    assert screen.contract_id is None
+    assert screen.contract_picker_b.currentIndex() == -1

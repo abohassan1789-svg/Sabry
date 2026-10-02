@@ -683,3 +683,11 @@ def test_reload_lists_keeps_the_tree_scroll_position(screen):
     QApplication.processEvents()
     assert bar.value() == kept
     screen.hide()
+
+
+def test_clearing_the_cards_survives_an_unreferenced_widget(screen):
+    """Review fix: the loop crashed on a widget only the grid held (e.g. an empty-state caption)."""
+    from PySide6.QtWidgets import QLabel
+
+    screen.cards_grid.addWidget(QLabel("—"), 0, 0)
+    screen._fill_cards([])

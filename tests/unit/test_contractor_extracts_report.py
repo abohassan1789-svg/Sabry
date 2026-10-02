@@ -319,3 +319,18 @@ def test_reload_lists_reports_a_database_error_instead_of_raising(screen, monkey
     monkeypatch.setattr(screen.service, "contractor_choices", down)
     screen.reload_lists()
     assert shown and "database is down" in shown[0][1]
+
+
+def test_the_refresh_button_reports_a_database_error_too(screen, monkeypatch):
+    """Review fix: «تحديث» must behave like the automatic reload, not raise."""
+    from PySide6.QtWidgets import QMessageBox
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: shown.append(a[1:3]))
+
+    def down():
+        raise RuntimeError("database is down")
+
+    monkeypatch.setattr(screen.service, "contractor_choices", down)
+    screen.refresh_button.click()
+    assert shown and "database is down" in shown[0][1]

@@ -1015,10 +1015,12 @@ class ContractorPaymentsScreen(QWidget):
 
     def _fill_cards(self, extracts: list[dict[str, Any]]) -> None:
         while self.cards_grid.count():
-            item = self.cards_grid.takeAt(0)
-            if item.widget() is not None:
-                item.widget().setParent(None)
-                item.widget().deleteLater()
+            # Hold the widget: after setParent(None) an unreferenced one is gone
+            # and the item returns None.
+            widget = self.cards_grid.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
         self._cards = {}
         cards = [self._build_extract_card(row) for row in extracts]
         if self.project_id is not None:

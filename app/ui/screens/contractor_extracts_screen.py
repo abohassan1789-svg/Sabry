@@ -996,6 +996,11 @@ class ContractorExtractsScreen(QWidget):
             self.contract_picker_b.blockSignals(True)
             _select_data(self.contract_picker_b, self.contract_id)
             self.contract_picker_b.blockSignals(False)
+        else:
+            # No contract open: the «all contracts» list must not show someone else's.
+            self.contract_picker_b.blockSignals(True)
+            self.contract_picker_b.setCurrentIndex(-1)
+            self.contract_picker_b.blockSignals(False)
         for form in self.forms:
             form.set_contract(self.contract)
             form.set_advance_context(self.extract_rows, None if self.mode == "new" else self.current_id)

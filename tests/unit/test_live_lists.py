@@ -183,3 +183,37 @@ def test_a_contractor_approved_in_its_screen_reaches_the_open_contracts_screen(l
     assert live.is_stale(contracts)
     _activate(contracts)
     assert contracts.tree_form.contractor.findData(9) >= 0
+
+
+def test_reopening_from_the_sidebar_shows_the_window_before_reloading_it():
+    """A reload error (shown in a dialog) must find the window already on screen."""
+    from app.ui.main_window import ReviewMainWindow
+
+    calls = []
+
+    class Window:
+        def showMaximized(self):
+            calls.append("show")
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            calls.append("activate")
+
+    class Live:
+        def opened(self, window):
+            calls.append("reload")
+
+    class MainWindow:
+        open_windows = {"contractor_contracts": Window()}
+        live_lists = Live()
+
+        def _can_view(self, key):
+            return True
+
+        def _highlight(self, key):
+            calls.append("highlight")
+
+    ReviewMainWindow.open_screen(MainWindow(), "contractor_contracts")
+    assert calls == ["show", "activate", "reload", "highlight"]

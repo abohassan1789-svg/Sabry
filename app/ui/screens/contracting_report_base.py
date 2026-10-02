@@ -382,7 +382,8 @@ class ContractingReportBase(QWidget):
         self.all_dates.toggled.connect(self._sync_dates)
         self.company_combo.currentIndexChanged.connect(self._company_changed)
         self.show_button.clicked.connect(self.run_report)
-        self.refresh_button.clicked.connect(self.refresh_all)
+        # Same path as the automatic reload: a database error is shown, never raised.
+        self.refresh_button.clicked.connect(self.reload_lists)
         self.exit_button.clicked.connect(self.window().close)
         for widget in (self.all_dates, self.date_from, self.date_to, self.company_combo,
                        self.project_combo, self.contractor_combo):
