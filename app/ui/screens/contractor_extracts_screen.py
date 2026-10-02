@@ -994,7 +994,8 @@ class ContractorExtractsScreen(QWidget):
                 mine = []
             self._fill_contract_picker_a(mine, self.contract_id)
             self.contract_picker_b.blockSignals(True)
-            _select_data(self.contract_picker_b, self.contract_id)
+            # -1 when this (older) list lacks the contract: never show another one.
+            self.contract_picker_b.setCurrentIndex(self.contract_picker_b.findData(self.contract_id))
             self.contract_picker_b.blockSignals(False)
         else:
             # No contract open: the «all contracts» list must not show someone else's.

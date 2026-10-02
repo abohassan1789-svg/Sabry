@@ -551,3 +551,13 @@ def test_no_open_contract_leaves_the_contract_list_unselected(screen, monkeypatc
     screen.reload_lists()
     assert screen.contract_id is None
     assert screen.contract_picker_b.currentIndex() == -1
+
+
+def test_a_contract_missing_from_a_stale_list_does_not_show_another_one(screen):
+    """Review fix: opening a contract the «all contracts» list doesn't have yet must not
+    leave that list on someone else's contract."""
+    picker = screen.contract_picker_b
+    picker.removeItem(picker.findData(101))  # the list predates contract 101's approval
+    screen.set_contract(101)
+    assert screen.contract_id == 101
+    assert picker.currentIndex() == -1
