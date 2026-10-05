@@ -78,6 +78,7 @@ from app.ui.screens.tawrid_comprehensive_report_screen import TawridComprehensiv
 from app.ui.screens.tawrid_treasury_statement_screen import TawridTreasuryStatementScreen
 from app.ui.screens.workers_screen import WorkersScreen
 from app.ui.screens.contractors_screen import ContractorsScreen
+from app.ui.screens.company_info_screen import CompanyInfoScreen
 from app.ui.screens.company_projects_screen import CompanyProjectsScreen
 from app.ui.screens.contractor_contracts_screen import ContractorContractsScreen
 from app.ui.screens.contractor_extracts_screen import ContractorExtractsScreen
@@ -228,6 +229,7 @@ NAV_SECTIONS: tuple[tuple[str, str, str, tuple[tuple[str, str, str], ...]], ...]
     )),
     ("contracting", "المقاولات", "🏗", (
         ("contractors_dashboard", "داشبورد المقاولين", "📊"),
+        ("company_info", "بيانات الشركة", "🏛"),
         ("contractors", "المقاولين", "👷"),
         ("company_projects", "الشركات والمشاريع", "🏢"),
         ("contractor_contracts", "عقود المقاولين", "🤝"),
@@ -379,6 +381,11 @@ class ReviewMainWindow(QMainWindow):
             "title": "فاتورة المشتريات",
             "view": "purchases.purchase_invoices.view",
             "make": lambda: PurchaseInvoicePage(),
+        }
+        factories["company_info"] = {
+            "title": "بيانات الشركة",
+            "view": "contracting.company_info.view",
+            "make": lambda: CompanyInfoScreen(),
         }
         factories["company_projects"] = {
             "title": "الشركات والمشاريع",

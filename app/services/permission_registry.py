@@ -103,6 +103,11 @@ SCREEN_TARGETS: list[dict[str, str]] = [
     {"module_code": "tawrid", "module_name_ar": "قسم التوريدات", "module_name_en": "Tawrid",
      "target_code": "tawrid_treasury_statement", "target_name_ar": "كشف حساب الخزينة",
      "target_name_en": "Treasury Statement"},
+    # بيانات الشركة: the companies the app prints for, checked as
+    # ``contracting.company_info.<action>``.
+    {"module_code": "contracting", "module_name_ar": "المقاولات", "module_name_en": "Contracting",
+     "target_code": "company_info", "target_name_ar": "بيانات الشركة",
+     "target_name_en": "Company Info"},
     # الشركات والمشاريع is its own screen (two tables), checked as
     # ``contracting.company_projects.<action>`` by the screen and the sidebar.
     {"module_code": "contracting", "module_name_ar": "المقاولات", "module_name_en": "Contracting",
@@ -313,6 +318,8 @@ CONTRACTING_SCREEN_ACTIONS: tuple[str, ...] = (
 )
 CONTRACTING_REPORT_ACTIONS: tuple[str, ...] = ("view", "filter", "print", "export")
 SECURITY_SCREEN_ACTIONS: tuple[str, ...] = ("view", "create", "edit", "save", "delete")
+# بيانات الشركة: no مسودة / معتمد, so no approve / unapprove.
+COMPANY_INFO_ACTIONS: tuple[str, ...] = ("view", "create", "edit", "save", "delete")
 
 TARGET_ACTIONS: dict[str, tuple[str, ...]] = {
     # المقاولات — شاشات (contractors keeps module "crm": crm.contractors.*).
@@ -321,6 +328,7 @@ TARGET_ACTIONS: dict[str, tuple[str, ...]] = {
     "contractor_contracts": CONTRACTING_SCREEN_ACTIONS,
     "contractor_extracts": CONTRACTING_SCREEN_ACTIONS,
     "contractor_payments": CONTRACTING_SCREEN_ACTIONS,
+    "company_info": COMPANY_INFO_ACTIONS,
     # المقاولات — داشبورد وتقارير.
     "contractors_dashboard": CONTRACTING_REPORT_ACTIONS,
     "contractor_contracts_report": CONTRACTING_REPORT_ACTIONS,

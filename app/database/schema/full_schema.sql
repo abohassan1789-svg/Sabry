@@ -3666,3 +3666,38 @@ BEGIN
     END IF;
   END LOOP;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- شاشة بيانات الشركة (user request, 2026-10-05): the companies the app prints
+-- for. Their name, tax registration number, address and logo head the
+-- printouts. More than one company is allowed (user, 2026-10-05); which one a
+-- printout uses is decided later. Independent of the older ``companies`` table
+-- (invoice letterheads) and of ``client_companies`` (the contracting clients).
+--   * ``logo`` is the image itself (bytea, with its mime type), never a path.
+--   * ``show_address_in_print`` is the «يظهر في الطباعة» box beside the
+--     address. Only the address has one; the rest always prints.
+--   * Two companies cannot share a name (trimmed, any case).
+CREATE TABLE IF NOT EXISTS public.company_info (
+    company_info_id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+    company_name character varying(200) NOT NULL,
+    tax_registration_no character varying(50),
+    address character varying(300),
+    show_address_in_print boolean DEFAULT true NOT NULL,
+    logo bytea,
+    logo_mime character varying(64),
+    updated_by integer,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_company_info_name_not_blank CHECK ((char_length(btrim((company_name)::text)) > 0))
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pk_company_info' AND conrelid = 'public.company_info'::regclass) THEN
+    ALTER TABLE ONLY public.company_info ADD CONSTRAINT pk_company_info PRIMARY KEY (company_info_id);
+  END IF;
+END $$;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_company_info_name ON public.company_info USING btree (upper(btrim((company_name)::text)));
+
+DROP TRIGGER IF EXISTS trg_company_info_set_updated_at ON public.company_info;
+CREATE TRIGGER trg_company_info_set_updated_at BEFORE UPDATE ON public.company_info FOR EACH ROW EXECUTE FUNCTION public.client_company_set_updated_at();
