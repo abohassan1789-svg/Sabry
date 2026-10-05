@@ -3701,3 +3701,39 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_company_info_name ON public.company_info US
 
 DROP TRIGGER IF EXISTS trg_company_info_set_updated_at ON public.company_info;
 CREATE TRIGGER trg_company_info_set_updated_at BEFORE UPDATE ON public.company_info FOR EACH ROW EXECUTE FUNCTION public.client_company_set_updated_at();
+
+-- ---------------------------------------------------------------------------
+-- مرفقات عقود المقاولين (user request, 2026-10-05): pictures and PDF files
+-- attached to a contract, kept apart on the screen (two tabs).
+--   * ``data`` is the file itself (bytea), never a path, so every PC opens
+--     the same file. ``thumbnail`` is a small PNG of a picture for the list.
+--   * ``kind`` is 'image' or 'pdf'.
+--   * Deleting a contract deletes its attachments (ON DELETE CASCADE).
+CREATE TABLE IF NOT EXISTS public.contractor_contract_attachments (
+    attachment_id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+    contract_id integer NOT NULL,
+    kind character varying(10) NOT NULL,
+    file_name character varying(255) NOT NULL,
+    mime_type character varying(64) NOT NULL,
+    file_size integer NOT NULL,
+    data bytea NOT NULL,
+    thumbnail bytea,
+    uploaded_by integer,
+    uploaded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_contract_attachments_kind CHECK (((kind)::text = ANY ((ARRAY['image'::character varying, 'pdf'::character varying])::text[]))),
+    CONSTRAINT ck_contract_attachments_name_not_blank CHECK ((char_length(btrim((file_name)::text)) > 0))
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pk_contract_attachments' AND conrelid = 'public.contractor_contract_attachments'::regclass) THEN
+    ALTER TABLE ONLY public.contractor_contract_attachments ADD CONSTRAINT pk_contract_attachments PRIMARY KEY (attachment_id);
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_contract_attachments_contract ON public.contractor_contract_attachments USING btree (contract_id, kind);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_contract_attachments_contract' AND conrelid = 'public.contractor_contract_attachments'::regclass) THEN
+    ALTER TABLE ONLY public.contractor_contract_attachments ADD CONSTRAINT fk_contract_attachments_contract FOREIGN KEY (contract_id) REFERENCES public.contractor_contracts(contract_id) ON UPDATE CASCADE ON DELETE CASCADE;
+  END IF;
+END $$;

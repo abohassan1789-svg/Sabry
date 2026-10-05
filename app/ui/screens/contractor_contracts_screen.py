@@ -17,6 +17,11 @@ the project's, so picking a company just narrows the project list.
 مسودة / معتمد (2026-10-02): «حفظ» keeps a contract as a draft, «اعتماد» /
 «إلغاء الاعتماد» (``ApprovalControls``) move it; drafts are marked in the tree
 and on the cards. An approved contract is locked except for an admin.
+
+المرفقات (2026-10-05): «المرفقات» opens the contract's pictures and PDF files
+(``ContractAttachmentsDialog``), kept in the database. Opening and downloading
+need only the screen; attaching and deleting follow «تعديل» (the edit
+permission, and an approved contract is locked except for an admin).
 """
 
 from __future__ import annotations
@@ -47,6 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.security.session_context import SESSION
+from app.services.contract_attachment_service import IMAGE, PDF, ContractAttachmentService
 from app.services.contracting_approval import ApprovalError
 from app.services.contractor_contract_service import (
     RATE_FIELDS,
@@ -58,6 +64,7 @@ from app.services.contractor_contract_service import (
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
 from app.ui.common.live_lists import notify_data_changed
+from app.ui.dialogs.contract_attachments_dialog import ContractAttachmentsDialog
 
 PERMISSION_BASE = "contracting.contractor_contracts"
 BLUE = "#0369A1"
@@ -414,9 +421,12 @@ class ContractForm(QWidget):
 
 
 class ContractorContractsScreen(QWidget):
-    def __init__(self, service: ContractorContractService | None = None, parent: QWidget | None = None) -> None:
+    def __init__(self, service: ContractorContractService | None = None, parent: QWidget | None = None,
+                 attachments: ContractAttachmentService | None = None) -> None:
         super().__init__(parent)
         self.service = service or ContractorContractService()
+        self.attachments = attachments or ContractAttachmentService()
+        self._attachment_counts: dict[str, int] = {IMAGE: 0, PDF: 0}
         self.current_id: Any = None
         self.current_record: dict[str, Any] | None = None
         self.mode = "view"
@@ -544,6 +554,14 @@ class ContractorContractsScreen(QWidget):
                 button.setStyleSheet(_button_style(bg, hover))
             layout.addWidget(button)
         self.approval.add_buttons(layout)
+
+        self.attachments_button = QPushButton("المرفقات")
+        self.attachments_button.setFixedHeight(38)
+        self.attachments_button.setIcon(self.style().standardIcon(QStyle.SP_DirOpenIcon))
+        self.attachments_button.setToolTip("صور العقد وملفات الـ PDF: إرفاق، فتح، تنزيل")
+        self.attachments_button.setStyleSheet(_button_style("#7C3AED", "#6D28D9"))
+        self.attachments_button.clicked.connect(self.open_attachments)
+        layout.addWidget(self.attachments_button)
 
         self.search_text = QLineEdit()
         self.search_text.setPlaceholderText("ابحث برقم العقد أو المقاول أو المشروع")
@@ -950,6 +968,7 @@ class ContractorContractsScreen(QWidget):
         self.current_id, self.current_record = record["contract_id"], dict(record)
         for form in self.forms:
             form.fill(record)
+        self._refresh_attachment_count()
         # Keep tab 8 on this contract's contractor.
         if self.contractor_picker.currentData() != record["contractor_id"]:
             self.contractor_picker.blockSignals(True)
@@ -962,6 +981,7 @@ class ContractorContractsScreen(QWidget):
 
     def _show_empty(self) -> None:
         self.current_id, self.current_record = None, None
+        self._refresh_attachment_count()
         for form in self.forms:
             form.clear("اختار عقد من الشجرة أو الكروت، أو اضغط «عقد جديد».")
         self.set_mode("view")
@@ -1044,8 +1064,10 @@ class ContractorContractsScreen(QWidget):
         if (self.current_id is None or self.mode != "view" or not self._perm_delete
                 or not self.approval.may_delete(self._status())):
             return
+        attached = sum(self._attachment_counts.values())
+        also = f"\nهيتحذف معاه {attached} مرفق." if attached else ""
         answer = QMessageBox.question(
-            self, "تأكيد الحذف", f"هل تريد حذف العقد «{(self.current_record or {}).get('contract_no', '')}»؟",
+            self, "تأكيد الحذف", f"هل تريد حذف العقد «{(self.current_record or {}).get('contract_no', '')}»؟{also}",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
@@ -1085,6 +1107,31 @@ class ContractorContractsScreen(QWidget):
         if self.approval.unapprove(f"العقد «{number}»", lambda: self.service.unapprove(contract_id)):
             self._approval_done("تم إلغاء اعتماد العقد، ورجع مسودة.")
 
+    # -- المرفقات -------------------------------------------------------------------------------
+
+    def _refresh_attachment_count(self) -> None:
+        """Show «المرفقات (n)» for the open contract. A failure must never block the screen."""
+        counts = {IMAGE: 0, PDF: 0}
+        if self.current_id is not None:
+            try:
+                counts = self.attachments.counts(self.current_id)
+            except Exception:
+                pass
+        self._attachment_counts = counts
+        total = sum(counts.values())
+        self.attachments_button.setText(f"المرفقات ({total})" if total else "المرفقات")
+        self.attachments_button.setToolTip(
+            f"صور: {counts.get(IMAGE, 0)} · ملفات PDF: {counts.get(PDF, 0)} — إرفاق، فتح، تنزيل")
+
+    def open_attachments(self) -> None:
+        if self.current_id is None or self._busy():
+            return
+        can_modify = self._perm_edit and self.approval.may_edit(self._status())
+        dialog = ContractAttachmentsDialog(self.attachments, self.current_id,
+                                           (self.current_record or {}).get("contract_no", ""), can_modify, self)
+        dialog.exec()
+        self._refresh_attachment_count()
+
     # -- modes ---------------------------------------------------------------------------------
 
     def set_mode(self, mode: str) -> None:
@@ -1101,6 +1148,7 @@ class ContractorContractsScreen(QWidget):
         self.save_button.setEnabled(editing and self._perm_save)
         self.cancel_button.setEnabled(editing)
         self.approval.update(editing, status, self.edit_button, self.delete_button)
+        self.attachments_button.setEnabled(not editing and has_record)
         self.search_text.setEnabled(not editing)
         self.contractor_picker.setEnabled(not editing)
         self.tabs.tabBar().setEnabled(not editing)

@@ -144,6 +144,20 @@ class FakeService:
         self.unapproved.append(contract_id)
 
 
+class FakeAttachments:
+    """Attachment counts per contract, so the screen never reaches a database."""
+
+    COUNTS = {101: {"image": 2, "pdf": 1}}
+
+    def counts(self, contract_id):
+        return dict(self.COUNTS.get(int(contract_id), {"image": 0, "pdf": 0}))
+
+
+@pytest.fixture(autouse=True)
+def no_attachment_database(monkeypatch):
+    monkeypatch.setattr(screen_module, "ContractAttachmentService", FakeAttachments)
+
+
 @pytest.fixture(scope="module")
 def qt_app():
     return QApplication.instance() or QApplication([])
@@ -456,3 +470,34 @@ def test_reload_after_the_first_contractor_is_approved_does_not_crash(qt_app, mo
     service.contractor_choices = real  # one approved in «المقاولين»
     screen.reload_lists()
     assert screen.contractor_picker.count() == len(CONTRACTORS)
+
+
+# --- المرفقات (2026-10-05) -------------------------------------------------------------
+
+def test_attachments_button_shows_the_open_contracts_count(screen):
+    assert not screen.attachments_button.isEnabled()  # no contract open
+    screen.load_contract(101)
+    assert screen.attachments_button.isEnabled()
+    assert screen.attachments_button.text() == "المرفقات (3)"
+    screen.load_contract(102)
+    assert screen.attachments_button.text() == "المرفقات"
+    screen.edit_record()
+    assert not screen.attachments_button.isEnabled()  # not mid-edit
+
+
+def test_attachments_dialog_may_modify_only_when_the_contract_may_be_edited(screen, monkeypatch):
+    opened = []
+
+    class Dialog:
+        def __init__(self, service, contract_id, contract_no, can_modify, parent=None):
+            opened.append((contract_id, contract_no, can_modify))
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(screen_module, "ContractAttachmentsDialog", Dialog)
+    screen.load_contract(101)  # a draft
+    screen.open_attachments()
+    screen.load_contract(100)  # approved: locked for a non-admin
+    screen.open_attachments()
+    assert opened == [(101, "A-H/CT-1002", True), (100, "A-H/CT-1001", False)]
