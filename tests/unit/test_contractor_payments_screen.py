@@ -91,7 +91,7 @@ def _payment(payment_id):
             "notes": notes, "extract_no": x["extract_no"] if x else "دفعة عامة",
             "contractor_id": contractor_id, "contractor_name": CONTRACTORS[contractor_id - 1]["contractor_name"],
             "company_id": company_id, "company_name": company_name, "project_id": project_id,
-            "project_name": project_name, "status": "approved"}
+            "project_name": project_name, "status": "approved", "account_type": "رصيد جاري"}
 
 
 class FakeService:
@@ -221,10 +221,12 @@ class _NoDb:
     ({"amount": "0"}, "مبلغ"),
     ({"amount": "-5"}, "مبلغ"),
     ({"notes": "x" * 501}, "الملاحظات"),
+    ({"account_type": None}, "نوع الحساب"),
+    ({"account_type": "خزينة"}, "نوع الحساب"),
 ])
 def test_save_refuses_bad_payments(change, message):
     data = {"contractor_id": 1, "project_id": 11, "extract_id": 501, "payment_date": "2026-09-26",
-            "amount": "1,000", "notes": ""}
+            "amount": "1,000", "notes": "", "account_type": "رصيد جاري"}
     data.update(change)
     with pytest.raises(PaymentError, match=message):
         ContractorPaymentService(_NoDb()).save_payment(data)
@@ -248,7 +250,8 @@ class _RecordingDb:
 def test_save_without_an_extract_is_a_general_payment():
     db = _RecordingDb(None)
     new_id = ContractorPaymentService(db).save_payment(
-        {"contractor_id": 1, "project_id": 11, "extract_id": None, "payment_date": "2026-09-26", "amount": "5,000"})
+        {"contractor_id": 1, "project_id": 11, "extract_id": None, "payment_date": "2026-09-26", "amount": "5,000",
+         "account_type": "رصيد جاري"})
     assert new_id == 77
     sql, params = db.sql[-1]
     assert sql.startswith("INSERT") and params[1:4] == [1, 11, None] and params[4] == Decimal("5000")
@@ -259,7 +262,8 @@ def test_save_refuses_a_draft_contractor_or_project():
     db = _RecordingDb(None, status="draft")
     with pytest.raises(ApprovalError, match="مسودة"):
         ContractorPaymentService(db).save_payment(
-            {"contractor_id": 1, "project_id": 11, "extract_id": None, "payment_date": "2026-09-26", "amount": "1"})
+            {"contractor_id": 1, "project_id": 11, "extract_id": None, "payment_date": "2026-09-26", "amount": "1",
+             "account_type": "رصيد جاري"})
     assert not any(sql.startswith("INSERT") for sql, _p in db.sql)
 
 
@@ -267,7 +271,8 @@ def test_save_refuses_an_extract_of_another_contractor_or_project():
     db = _RecordingDb({"contractor_id": 2, "project_id": 21})
     with pytest.raises(PaymentError, match="مش تبع"):
         ContractorPaymentService(db).save_payment(
-            {"contractor_id": 1, "project_id": 11, "extract_id": 510, "payment_date": "2026-09-26", "amount": "1"})
+            {"contractor_id": 1, "project_id": 11, "extract_id": 510, "payment_date": "2026-09-26", "amount": "1",
+             "account_type": "رصيد جاري"})
 
 
 def test_an_extract_with_payments_cannot_be_deleted():
@@ -280,6 +285,11 @@ def test_an_extract_with_payments_cannot_be_deleted():
 
     with pytest.raises(ExtractError, match="2 دفعة"):
         ContractorExtractService(Db()).delete_extract(501)
+
+
+def _pick_account(fields, account_type="رصيد جاري"):
+    """نوع الحساب is required and starts empty on a new payment."""
+    fields.account.setCurrentIndex(fields.account.findData(account_type))
 
 
 # --- the two tabs --------------------------------------------------------------------------------
@@ -378,6 +388,7 @@ def test_new_payment_on_the_selected_extract(screen):
     assert screen.tree_stats["previous"].text() == "200,000.00"
     assert screen.tree_stats["this"].text() == "30,000.00"
     assert screen.tree_stats["remaining"].text() == "70,000.00"
+    _pick_account(screen.fields)
     screen.save_record()
     data, record_id = screen.service.saved[-1]
     assert record_id is None
@@ -485,6 +496,7 @@ def test_saving_a_general_payment_sends_no_extract(screen):
     screen.tree_fields.amount.setText("10000")
     assert screen.tree_stats["previous"].text() == "320,000.00"
     assert screen.tree_stats["remaining"].text() == "70,000.00"
+    _pick_account(screen.fields)
     screen.save_record()
     data, record_id = screen.service.saved[-1]
     assert record_id is None
@@ -496,6 +508,7 @@ def test_a_new_payment_can_switch_to_general(screen):
     screen.tree_extract.setCurrentIndex(screen.tree_extract.findData(GENERAL))
     assert screen.mode == "new" and screen.extract_id is None
     screen.tree_fields.amount.setText("500")
+    _pick_account(screen.fields)
     screen.save_record()
     assert screen.service.saved[-1][0]["extract_id"] is None
 
@@ -505,7 +518,8 @@ def test_a_new_payment_can_switch_to_general(screen):
 from app.services.contractor_payment_service import CASH, CHEQUE, PAYMENT_METHODS, TRANSFER, method_text  # noqa: E402
 
 _CHEQUE = {"contractor_id": 1, "project_id": 11, "extract_id": None, "payment_date": "2026-09-26",
-           "amount": "5,000", "payment_method": CHEQUE, "reference_no": " 123456 ", "cheque_date": "2026-10-01"}
+           "amount": "5,000", "payment_method": CHEQUE, "reference_no": " 123456 ", "cheque_date": "2026-10-01",
+           "account_type": "تأمين أعمال"}
 
 
 def test_methods_are_the_users_list():
@@ -528,17 +542,17 @@ def test_cheque_is_saved_with_its_number_and_date():
     db = _RecordingDb(None)
     ContractorPaymentService(db).save_payment(dict(_CHEQUE))
     sql, params = db.sql[-1]
-    assert "payment_method, reference_no, cheque_date" in sql
-    assert params[-3:] == [CHEQUE, "123456", "2026-10-01"]
+    assert "payment_method, reference_no, cheque_date, account_type" in sql
+    assert params[-4:] == [CHEQUE, "123456", "2026-10-01", "تأمين أعمال"]
 
 
 def test_cash_stores_no_number_or_date():
     """Switching a cheque back to نقدي must not leave its number behind."""
     db = _RecordingDb(None)
     ContractorPaymentService(db).save_payment(dict(_CHEQUE, payment_method=CASH))
-    assert db.sql[-1][1][-3:] == [CASH, None, None]
+    assert db.sql[-1][1][-4:-1] == [CASH, None, None]
     ContractorPaymentService(db).save_payment({k: v for k, v in _CHEQUE.items() if k != "payment_method"})
-    assert db.sql[-1][1][-3:] == [CASH, None, None]  # an old caller without a method = نقدي
+    assert db.sql[-1][1][-4:-1] == [CASH, None, None]  # an old caller without a method = نقدي
 
 
 def test_method_text_in_the_tables():
@@ -572,6 +586,7 @@ def test_saving_a_cheque_from_the_screen(screen):
     assert fields.cheque_date.date() == QDate(2026, 9, 20)  # starts on the payment's date
     fields.reference.setText("778899")
     fields.cheque_date.setDate(QDate(2026, 10, 5))
+    _pick_account(screen.fields)
     screen.save_record()
     data, _pid = screen.service.saved[-1]
     assert (data["payment_method"], data["reference_no"], data["cheque_date"]) == (CHEQUE, "778899", "2026-10-05")
@@ -593,10 +608,11 @@ def test_a_saved_cheque_opens_with_its_number_in_both_tabs(admin_screen):
 
 def test_payment_tables_show_the_method(screen):
     headers = [screen.tree_table.horizontalHeaderItem(i).text() for i in range(screen.tree_table.columnCount())]
-    assert headers == ["التاريخ", "رقم المستخلص", "المبلغ", "طريقة الدفع", "ملاحظات"]
-    assert screen.tree_table.item(0, 3).text() == "نقدي"
+    assert headers == ["التاريخ", "رقم المستخلص", "المبلغ", "نوع الحساب", "طريقة الدفع", "ملاحظات"]
+    assert screen.tree_table.item(0, 3).text() == "رصيد جاري"
+    assert screen.tree_table.item(0, 4).text() == "نقدي"
     board = [screen.board_table.horizontalHeaderItem(i).text() for i in range(screen.board_table.columnCount())]
-    assert board[3:] == ["المبلغ", "طريقة الدفع", "ملاحظات"]
+    assert board[3:] == ["المبلغ", "نوع الحساب", "طريقة الدفع", "ملاحظات"]
 
 
 # --- مسودة / معتمد --------------------------------------------------------------------------
@@ -691,3 +707,49 @@ def test_clearing_the_cards_survives_an_unreferenced_widget(screen):
 
     screen.cards_grid.addWidget(QLabel("—"), 0, 0)
     screen._fill_cards([])
+
+
+# --- نوع الحساب: رصيد جاري / تأمين أعمال / تأمينات اجتماعية — required (2026-10-07) ---------------
+
+from app.services.contractor_payment_service import ACCOUNT_TYPES  # noqa: E402
+from app.ui.screens.contractor_payments_screen import ACCOUNT_PROMPT  # noqa: E402
+
+
+def test_account_types_are_the_users_list():
+    assert ACCOUNT_TYPES == ("رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية")
+
+
+def test_a_new_payment_starts_without_an_account_type(screen):
+    for fields in screen.fields_pair:
+        assert [fields.account.itemText(i) for i in range(fields.account.count())] == [ACCOUNT_PROMPT, *ACCOUNT_TYPES]
+    for tab in (TAB_TREE, TAB_BOARD):  # the open tab's form is the one cleared
+        screen.tabs.setCurrentIndex(tab)
+        screen.new_payment()
+        assert screen.fields.account.currentData() is None and screen.fields.account.isEnabled()
+        screen.cancel_edit()
+
+
+def test_saving_without_an_account_type_is_refused(screen, monkeypatch):
+    warnings = []
+    monkeypatch.setattr(screen_module.QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
+    screen.new_payment()
+    screen.fields.amount.setText("30000")
+    screen.save_record()
+    assert screen.service.saved == [] and screen.mode == "new"
+    assert warnings == ["اختار نوع الحساب."]
+    _pick_account(screen.fields, "تأمين أعمال")
+    screen.save_record()
+    assert screen.service.saved[-1][0]["account_type"] == "تأمين أعمال" and screen.mode == "view"
+
+
+def test_a_saved_payment_opens_with_its_account_type_in_both_tabs(admin_screen):
+    screen = admin_screen
+    record = dict(_payment(902), account_type="تأمينات اجتماعية")
+    screen.service.get_payment = lambda _pid: dict(record)
+    screen.load_payment(902)
+    for fields in screen.fields_pair:
+        assert fields.account.currentData() == "تأمينات اجتماعية" and not fields.account.isEnabled()
+    screen.edit_record()
+    assert screen.fields.account.isEnabled()
+    screen.save_record()
+    assert screen.service.saved[-1][0]["account_type"] == "تأمينات اجتماعية"

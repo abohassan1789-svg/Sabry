@@ -395,10 +395,12 @@ def test_payments_saves_the_method_found_by_search(qt_app, monkeypatch):
     fields = screen.tree_fields
     fields.amount.setText("30000")
     _pick(fields.method, "حويل")
+    _pick(fields.account, "اجتماع")  # نوع الحساب, required since 2026-10-07
     fields.reference.setText("784512")
     screen.save_record()
     data, record_id = screen.service.saved[-1]
     assert record_id is None and data["payment_method"] == "تحويل" and data["extract_id"] == 501
+    assert data["account_type"] == "تأمينات اجتماعية"
     screen.close()
 
 

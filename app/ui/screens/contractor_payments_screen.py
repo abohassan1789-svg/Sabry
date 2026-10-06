@@ -63,6 +63,7 @@ from app.security.session_context import SESSION
 from app.services.contracting_approval import APPROVED, ApprovalError, approved_only
 from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_payment_service import (
+    ACCOUNT_TYPES,
     GENERAL_LABEL,
     PAYMENT_METHODS,
     REFERENCE_MAX,
@@ -103,6 +104,7 @@ CARD_COLUMNS = 3
 GENERAL = 0
 GENERAL_TEXT = "— دفعة عامة (بدون مستخلص) —"
 AUTO = object()  # select(): «pick the latest extract» (None means general)
+ACCOUNT_PROMPT = "— اختار نوع الحساب —"  # نوع الحساب starts empty: saving without one is refused
 
 _TABLE_QSS = (
     "QTableWidget { border:none; font-size:13px; font-weight:700; gridline-color:#E5E7EB; }"
@@ -140,7 +142,7 @@ def _to_qdate(value: Any) -> QDate | None:
 
 class PaymentFields:
     """The typed inputs of one payment: التاريخ، المبلغ، طريقة الدفع (+ رقم الشيك / الحوالة
-    وتاريخ الشيك لو شيك أو تحويل)، ملاحظات. One set per tab."""
+    وتاريخ الشيك لو شيك أو تحويل)، نوع الحساب، ملاحظات. One set per tab."""
 
     def __init__(self) -> None:
         self.date = _date_edit()
@@ -165,6 +167,12 @@ class PaymentFields:
         self.reference.setMaxLength(REFERENCE_MAX)
         self.reference.setStyleSheet(_EDITOR_QSS)
         self.cheque_date = _date_edit()
+        self.account = QComboBox()
+        self.account.addItem(ACCOUNT_PROMPT, None)
+        for account_type in ACCOUNT_TYPES:
+            self.account.addItem(account_type, account_type)
+        self.account.setMinimumHeight(38)
+        self.account.setStyleSheet(_COMBO_QSS)
         # The boxes of رقم الشيك / الحوالة and تاريخ الشيك: shown only for شيك / تحويل.
         self.reference_boxes: list[QWidget] = []
         self.method.currentIndexChanged.connect(self._method_changed)
@@ -199,6 +207,7 @@ class PaymentFields:
             "payment_method": self.method.currentData(),
             "reference_no": self.reference.text(),
             "cheque_date": self.cheque_date.date().toString("yyyy-MM-dd"),
+            "account_type": self.account.currentData(),
         }
 
     def fill(self, record: dict[str, Any]) -> None:
@@ -210,6 +219,7 @@ class PaymentFields:
         self.reference.setText(str(record.get("reference_no") or ""))
         self.cheque_date.setDate(_to_qdate(record.get("cheque_date")) or self.date.date())
         _select_data(self.method, record.get("payment_method") or PAYMENT_METHODS[0])
+        _select_data(self.account, record.get("account_type"))  # unknown → the empty prompt
         self._sync_reference()
 
     def clear(self) -> None:
@@ -219,6 +229,7 @@ class PaymentFields:
         self.reference.clear()
         self.cheque_date.setDate(QDate.currentDate())
         self.method.setCurrentIndex(0)
+        self.account.setCurrentIndex(0)  # no default: the user picks نوع الحساب
         self._sync_reference()
 
     def set_editing(self, editing: bool) -> None:
@@ -227,6 +238,7 @@ class PaymentFields:
         self.date.setReadOnly(not editing)
         self.date.setCalendarPopup(editing)
         self.method.setEnabled(editing)
+        self.account.setEnabled(editing)
         self.reference.setReadOnly(not editing)
         self.cheque_date.setReadOnly(not editing)
         self.cheque_date.setCalendarPopup(editing)
@@ -540,7 +552,8 @@ class ContractorPaymentsScreen(QWidget):
         grid.addWidget(reference_box, 2, 1)
         grid.addWidget(cheque_box, 2, 2)
         tree.watch_reference(reference_box, cheque_box)
-        grid.addWidget(self._labelled("ملاحظات", tree.notes), 3, 0, 1, 3)
+        grid.addWidget(self._labelled("نوع الحساب", tree.account), 3, 0)
+        grid.addWidget(self._labelled("ملاحظات", tree.notes), 3, 1, 1, 2)
         for col in range(3):
             grid.setColumnStretch(col, 1)
         form_col.addLayout(grid)
@@ -565,7 +578,7 @@ class ContractorPaymentsScreen(QWidget):
         table_col.setSpacing(6)
         self.tree_table_title = _caption("دفعات المستخلص", 15, GREEN)
         table_col.addWidget(self.tree_table_title)
-        self.tree_table = self._payments_table(["التاريخ", "رقم المستخلص", "المبلغ", "طريقة الدفع", "ملاحظات"])
+        self.tree_table = self._payments_table(["التاريخ", "رقم المستخلص", "المبلغ", "نوع الحساب", "طريقة الدفع", "ملاحظات"])
         table_col.addWidget(self.tree_table, 1)
         column.addWidget(table_card, 1)
         page_row.addLayout(column, 1)
@@ -613,7 +626,11 @@ class ContractorPaymentsScreen(QWidget):
         self.board_project.currentIndexChanged.connect(self._on_board_project)
         self.board_extract = self._combo()
         self.board_extract.currentIndexChanged.connect(lambda _i: self._on_extract_combo(self.board_extract))
-        form_col.addWidget(self._labelled("التاريخ", self.board_fields.date))
+        date_row = QHBoxLayout()
+        date_row.setSpacing(10)
+        date_row.addWidget(self._labelled("التاريخ", self.board_fields.date), 1)
+        date_row.addWidget(self._labelled("نوع الحساب", self.board_fields.account), 1)
+        form_col.addLayout(date_row)
         form_col.addWidget(self._labelled("اسم الشركة", self.board_company, 2))
         form_col.addWidget(self._labelled("اسم المشروع", self.board_project, 3))
         form_col.addWidget(self._labelled("رقم المستخلص", self.board_extract, 4, "اختياري — فاضي = دفعة عامة"))
@@ -675,7 +692,8 @@ class ContractorPaymentsScreen(QWidget):
         cards_scroll.setWidget(self.cards_host)
         side_col.addWidget(cards_scroll)
         side_col.addWidget(_caption("دفعات المقاول", 14, GREEN))
-        self.board_table = self._payments_table(["التاريخ", "رقم المستخلص", "اسم المشروع", "المبلغ", "طريقة الدفع", "ملاحظات"])
+        self.board_table = self._payments_table(["التاريخ", "رقم المستخلص", "اسم المشروع", "المبلغ", "نوع الحساب", "طريقة الدفع",
+                                                "ملاحظات"])
         side_col.addWidget(self.board_table, 1)
         body.addWidget(side, 1)
         column.addLayout(body, 1)
@@ -1048,7 +1066,8 @@ class ContractorPaymentsScreen(QWidget):
             values = [f"{_date_text(record.get('payment_date'))}{draft_suffix(record)}", record.get("extract_no") or ""]
             if with_project:
                 values.append(record.get("project_name") or "")
-            values += [_money(record.get("amount")), method_text(record), record.get("notes") or ""]
+            values += [_money(record.get("amount")), record.get("account_type") or "", method_text(record),
+                       record.get("notes") or ""]
             for col, text in enumerate(values):
                 item = QTableWidgetItem(str(text))
                 item.setData(Qt.UserRole, record["payment_id"])
@@ -1057,7 +1076,7 @@ class ContractorPaymentsScreen(QWidget):
                 table.setItem(index, col, item)
         if payments:
             values = (["إجمالي المعتمد", f"{len(approved)} دفعة"] + ([""] if with_project else [])
-                      + [_money(total), "", ""])
+                      + [_money(total), "", "", ""])
             for col, text in enumerate(values):
                 item = QTableWidgetItem(text)
                 item.setFlags(Qt.ItemIsEnabled)
@@ -1195,6 +1214,10 @@ class ContractorPaymentsScreen(QWidget):
             return
         data = dict(self.fields.values(), contractor_id=self.contractor_id, project_id=self.project_id,
                     extract_id=self.extract_id)
+        if data["account_type"] is None:  # required (user, 2026-10-07): ask before anything else
+            QMessageBox.warning(self, "لا يمكن الحفظ", "اختار نوع الحساب.")
+            self.fields.account.setFocus()
+            return
         balance = self.current_balance()
         if balance and balance["remaining"] < 0 and to_decimal(data["amount"]) > 0:
             answer = QMessageBox.question(

@@ -42,6 +42,9 @@ NOTES_MAX = 500
 REFERENCE_MAX = 50
 CASH, CHEQUE, TRANSFER = "نقدي", "شيك", "تحويل"
 PAYMENT_METHODS: tuple[str, ...] = (CASH, CHEQUE, TRANSFER)  # the list's order; the table CHECKs the same set
+# نوع الحساب (user request, 2026-10-07): which balance the payment comes out of; required.
+CURRENT_BALANCE, WORKS_INSURANCE, SOCIAL_INSURANCE = "رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية"
+ACCOUNT_TYPES: tuple[str, ...] = (CURRENT_BALANCE, WORKS_INSURANCE, SOCIAL_INSURANCE)  # the table CHECKs the same set
 GENERAL_LABEL = "دفعة عامة"  # what «رقم المستخلص» shows for a payment without one
 
 _CATALOG_SQL = (
@@ -64,7 +67,7 @@ _CATALOG_SQL = (
 
 _PAYMENT_SELECT = (
     "SELECT y.payment_id, y.payment_date, y.extract_id, y.amount, y.notes, "
-    "y.payment_method, y.reference_no, y.cheque_date, y.status, "
+    "y.payment_method, y.reference_no, y.cheque_date, y.account_type, y.status, "
     f"COALESCE(x.extract_no, '{GENERAL_LABEL}') AS extract_no, "
     "d.contractor_id, d.contractor_name, c.company_id, c.company_name, p.project_id, p.project_name "
     "FROM contractor_payments y "
@@ -232,7 +235,7 @@ class ContractorPaymentService:
             where = (
                 "WHERE concat_ws(' ', d.contractor_name, c.company_name, p.project_name, "
                 f"COALESCE(x.extract_no, '{GENERAL_LABEL}'), "
-                "y.notes, y.payment_date::text, y.payment_method, y.reference_no) ILIKE %s OR y.amount::text ILIKE %s "
+                "y.notes, y.payment_date::text, y.payment_method, y.reference_no, y.account_type) ILIKE %s OR y.amount::text ILIKE %s "
             )
             params = [f"%{needle}%", f"%{needle.replace(',', '')}%"]
         return self._db.fetch_all(
@@ -253,6 +256,9 @@ class ContractorPaymentService:
         amount = to_decimal(data.get("amount"))
         if amount <= 0:
             raise PaymentError("اكتب مبلغ الدفعة.")
+        account_type = data.get("account_type")
+        if account_type not in ACCOUNT_TYPES:
+            raise PaymentError("اختار نوع الحساب (رصيد جاري أو تأمين أعمال أو تأمينات اجتماعية).")
         notes = str(data.get("notes") or "").strip()
         if len(notes) > NOTES_MAX:
             raise PaymentError(f"الملاحظات أطول من {NOTES_MAX} حرف.")
@@ -284,19 +290,19 @@ class ContractorPaymentService:
         approval.check_parents(self._db, [(approval.CONTRACTOR, data["contractor_id"]),
                                           (approval.PROJECT, data["project_id"]), (approval.EXTRACT, extract_id)])
         params = [data["payment_date"], data["contractor_id"], data["project_id"], extract_id, amount, notes or None,
-                  method, reference, cheque_date]
+                  method, reference, cheque_date, account_type]
         if payment_id is None:
             row = self._db.fetch_one(
                 "INSERT INTO contractor_payments (payment_date, contractor_id, project_id, extract_id, amount, notes, "
-                "payment_method, reference_no, cheque_date) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING payment_id",
+                "payment_method, reference_no, cheque_date, account_type) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING payment_id",
                 params,
             )
             return int(row["payment_id"])
         self._db.execute(
             "UPDATE contractor_payments SET payment_date = %s, contractor_id = %s, project_id = %s, "
-            "extract_id = %s, amount = %s, notes = %s, payment_method = %s, reference_no = %s, cheque_date = %s "
-            "WHERE payment_id = %s",
+            "extract_id = %s, amount = %s, notes = %s, payment_method = %s, reference_no = %s, cheque_date = %s, "
+            "account_type = %s WHERE payment_id = %s",
             params + [payment_id],
         )
         return int(payment_id)

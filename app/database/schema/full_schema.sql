@@ -3737,3 +3737,15 @@ DO $$ BEGIN
     ALTER TABLE ONLY public.contractor_contract_attachments ADD CONSTRAINT fk_contract_attachments_contract FOREIGN KEY (contract_id) REFERENCES public.contractor_contracts(contract_id) ON UPDATE CASCADE ON DELETE CASCADE;
   END IF;
 END $$;
+
+-- ---------------------------------------------------------------------------
+-- نوع الحساب on contractor payments (user request, 2026-10-07): which balance a
+-- payment comes out of. The app makes the user pick one; payments made before
+-- the field existed were all against the current balance, so they get رصيد جاري.
+ALTER TABLE public.contractor_payments ADD COLUMN IF NOT EXISTS account_type character varying(20) DEFAULT 'رصيد جاري' NOT NULL;
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_contractor_payments_account_type' AND conrelid = 'public.contractor_payments'::regclass) THEN
+    ALTER TABLE ONLY public.contractor_payments ADD CONSTRAINT ck_contractor_payments_account_type CHECK (account_type IN ('رصيد جاري', 'تأمين أعمال', 'تأمينات اجتماعية'));
+  END IF;
+END $$;
