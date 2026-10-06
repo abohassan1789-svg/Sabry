@@ -45,6 +45,13 @@ PAYMENT_METHODS: tuple[str, ...] = (CASH, CHEQUE, TRANSFER)  # the list's order;
 # نوع الحساب (user request, 2026-10-07): which balance the payment comes out of; required.
 CURRENT_BALANCE, WORKS_INSURANCE, SOCIAL_INSURANCE = "رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية"
 ACCOUNT_TYPES: tuple[str, ...] = (CURRENT_BALANCE, WORKS_INSURANCE, SOCIAL_INSURANCE)  # the table CHECKs the same set
+# Each type pays out of its own balance (user, 2026-10-07): رصيد جاري out of صافي المستخلص, each
+# insurance out of what the extracts held back for it. Catalog fields: (held, paid by that type).
+ACCOUNT_FIELDS: dict[str, tuple[str, str]] = {
+    CURRENT_BALANCE: ("net", "paid"),
+    WORKS_INSURANCE: ("works_insurance", "paid_works_insurance"),
+    SOCIAL_INSURANCE: ("social_insurance", "paid_social_insurance"),
+}
 GENERAL_LABEL = "دفعة عامة"  # what «رقم المستخلص» shows for a payment without one
 
 _CATALOG_SQL = (
@@ -52,13 +59,18 @@ _CATALOG_SQL = (
     "x.withholding_tax_pct, x.works_insurance_pct, x.social_insurance_pct, x.other_deductions, "
     "k.contract_id, k.contract_no, d.contractor_id, d.contractor_code, d.contractor_name, "
     "c.company_id, c.company_code, c.company_name, p.project_id, p.project_code, p.project_name, "
-    "COALESCE(y.paid, 0) AS paid "
+    "COALESCE(y.paid, 0) AS paid, COALESCE(y.paid_works_insurance, 0) AS paid_works_insurance, "
+    "COALESCE(y.paid_social_insurance, 0) AS paid_social_insurance "
     "FROM contractor_extracts x "
     "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
     "JOIN contractors d ON d.contractor_id = k.contractor_id "
     "JOIN company_projects p ON p.project_id = k.project_id "
     "JOIN client_companies c ON c.company_id = p.company_id "
-    "LEFT JOIN (SELECT extract_id, sum(amount) AS paid FROM contractor_payments "
+    "LEFT JOIN (SELECT extract_id, "
+    f"sum(amount) FILTER (WHERE account_type = '{CURRENT_BALANCE}') AS paid, "
+    f"sum(amount) FILTER (WHERE account_type = '{WORKS_INSURANCE}') AS paid_works_insurance, "
+    f"sum(amount) FILTER (WHERE account_type = '{SOCIAL_INSURANCE}') AS paid_social_insurance "
+    "FROM contractor_payments "
     "WHERE extract_id IS NOT NULL AND status = 'approved' GROUP BY extract_id) y "
     "ON y.extract_id = x.extract_id "
     "WHERE x.status = 'approved' "
@@ -102,13 +114,25 @@ def _same(a: Any, b: Any) -> bool:
 # -- the cascade ------------------------------------------------------------------------
 
 def with_net(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Catalog rows plus ``net`` (صافي المستخلص) and ``remaining`` (net − paid)."""
+    """Catalog rows plus ``net`` (صافي المستخلص), ``remaining`` (net − its رصيد جاري payments)
+    and what it held back for each insurance (``works_insurance``, ``social_insurance``)."""
     out = []
     for row in rows:
-        net = extract_amounts(row)["net"]
+        amounts = extract_amounts(row)
+        net = amounts["net"]
         paid = to_decimal(row.get("paid"))
-        out.append(dict(row, net=net, paid=paid, remaining=net - paid))
+        out.append(dict(row, net=net, paid=paid, remaining=net - paid,
+                        works_insurance=amounts["works_insurance"], social_insurance=amounts["social_insurance"],
+                        paid_works_insurance=to_decimal(row.get("paid_works_insurance")),
+                        paid_social_insurance=to_decimal(row.get("paid_social_insurance"))))
     return out
+
+
+def extract_account(row: dict[str, Any], account_type: Any = CURRENT_BALANCE) -> tuple[Decimal, Decimal]:
+    """(held, paid) of one catalog extract for one نوع الحساب: صافي المستخلص and its رصيد جاري
+    payments, or the insurance it held back and that insurance's payments."""
+    held_key, paid_key = ACCOUNT_FIELDS.get(account_type, ACCOUNT_FIELDS[CURRENT_BALANCE])
+    return to_decimal(row.get(held_key)), to_decimal(row.get(paid_key))
 
 
 def _unique(rows: list[dict[str, Any]], key: str, fields: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -155,24 +179,34 @@ def payment_balance(net: Any, paid_total: Any, own_saved: Any, amount: Any) -> d
     return {"net": net, "previous": previous, "this": this, "remaining": net - previous - this}
 
 
-def general_paid(general: dict[tuple, Any], contractor_id: Any, project_id: Any = None) -> Decimal:
-    """The general payments (no extract) of the contractor — on one project, or on all when None.
+def general_paid(general: dict[tuple, Any], contractor_id: Any, project_id: Any = None,
+                 account_type: Any = CURRENT_BALANCE) -> Decimal:
+    """The general payments (no extract) of one نوع الحساب by the contractor — on one project,
+    or on all when None.
 
-    *general* maps ``(contractor_id, project_id)`` to their total
-    (``ContractorPaymentService.general_totals``).
+    *general* maps ``(contractor_id, project_id, account_type)`` to their total
+    (``ContractorPaymentService.general_totals``); a key without the type is رصيد جاري.
     """
-    return sum((to_decimal(total) for (contractor, project), total in general.items()
-                if _same(contractor, contractor_id) and (project_id is None or _same(project, project_id))),
-               Decimal("0"))
+    total = Decimal("0")
+    for key, amount in general.items():
+        contractor, project, *kind = key
+        if (_same(contractor, contractor_id) and (project_id is None or _same(project, project_id))
+                and (kind[0] if kind else CURRENT_BALANCE) == account_type):
+            total += to_decimal(amount)
+    return total
 
 
 def project_balance(catalog: list[dict[str, Any]], general: dict[tuple, Any], contractor_id: Any,
-                    company_id: Any, project_id: Any) -> dict[str, Decimal]:
-    """صافي مستخلصات المشروع (للمقاول) and everything paid on them, general payments included."""
+                    company_id: Any, project_id: Any, account_type: Any = CURRENT_BALANCE) -> dict[str, Decimal]:
+    """One نوع الحساب on the contractor's extracts of a project: what they hold (صافي المستخلصات,
+    or the insurance held back) and everything paid out of it, general payments included."""
     rows = extracts_of(catalog, contractor_id, company_id, project_id)
-    net = sum((to_decimal(r["net"]) for r in rows), Decimal("0"))
-    paid = sum((to_decimal(r["paid"]) for r in rows), Decimal("0")) + general_paid(general, contractor_id, project_id)
-    return {"net": net, "paid": paid, "remaining": net - paid}
+    held, paid = Decimal("0"), general_paid(general, contractor_id, project_id, account_type)
+    for row in rows:
+        row_held, row_paid = extract_account(row, account_type)
+        held += row_held
+        paid += row_paid
+    return {"net": held, "paid": paid, "remaining": held - paid}
 
 
 def contractor_summary(catalog: list[dict[str, Any]], contractor_id: Any,
@@ -201,12 +235,14 @@ class ContractorPaymentService:
         return with_net(self._db.fetch_all(_CATALOG_SQL))
 
     def general_totals(self) -> dict[tuple, Decimal]:
-        """``(contractor_id, project_id) -> total`` of the approved general payments (no extract)."""
+        """``(contractor_id, project_id, account_type) -> total`` of the approved general payments
+        (no extract)."""
         rows = self._db.fetch_all(
-            "SELECT contractor_id, project_id, sum(amount) AS total FROM contractor_payments "
-            "WHERE extract_id IS NULL AND status = 'approved' GROUP BY contractor_id, project_id"
+            "SELECT contractor_id, project_id, account_type, sum(amount) AS total FROM contractor_payments "
+            "WHERE extract_id IS NULL AND status = 'approved' GROUP BY contractor_id, project_id, account_type"
         )
-        return {(row["contractor_id"], row["project_id"]): to_decimal(row["total"]) for row in rows}
+        return {(row["contractor_id"], row["project_id"], row["account_type"]): to_decimal(row["total"])
+                for row in rows}
 
     # -- reading -----------------------------------------------------------
 
@@ -256,9 +292,10 @@ class ContractorPaymentService:
         amount = to_decimal(data.get("amount"))
         if amount <= 0:
             raise PaymentError("اكتب مبلغ الدفعة.")
-        account_type = data.get("account_type")
-        if account_type not in ACCOUNT_TYPES:
-            raise PaymentError("اختار نوع الحساب (رصيد جاري أو تأمين أعمال أو تأمينات اجتماعية).")
+        # نوع الحساب may wait while the payment is a draft; اعتماد needs it (user, 2026-10-07).
+        account_type = data.get("account_type") or None
+        if account_type is not None and account_type not in ACCOUNT_TYPES:
+            raise PaymentError("نوع الحساب لازم يكون رصيد جاري أو تأمين أعمال أو تأمينات اجتماعية.")
         notes = str(data.get("notes") or "").strip()
         if len(notes) > NOTES_MAX:
             raise PaymentError(f"الملاحظات أطول من {NOTES_MAX} حرف.")
@@ -314,6 +351,9 @@ class ContractorPaymentService:
     # -- مسودة / معتمد -------------------------------------------------------
 
     def approve(self, payment_id: Any, user_id: Any = None) -> None:
+        row = self._db.fetch_one("SELECT account_type FROM contractor_payments WHERE payment_id = %s", [payment_id])
+        if row is not None and not row.get("account_type"):
+            raise approval.ApprovalError("اختار نوع الحساب قبل الاعتماد (عدّل الدفعة واختاره).")
         approval.approve(self._db, approval.PAYMENT, payment_id, user_id)
 
     def unapprove(self, payment_id: Any) -> None:

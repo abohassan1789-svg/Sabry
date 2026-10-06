@@ -3740,9 +3740,12 @@ END $$;
 
 -- ---------------------------------------------------------------------------
 -- نوع الحساب on contractor payments (user request, 2026-10-07): which balance a
--- payment comes out of. The app makes the user pick one; payments made before
--- the field existed were all against the current balance, so they get رصيد جاري.
+-- payment comes out of. Payments made before the field existed were all against
+-- the current balance, so they get رصيد جاري. A draft may leave it empty; the app
+-- refuses اعتماد without one, so no default for new rows.
 ALTER TABLE public.contractor_payments ADD COLUMN IF NOT EXISTS account_type character varying(20) DEFAULT 'رصيد جاري' NOT NULL;
+ALTER TABLE public.contractor_payments ALTER COLUMN account_type DROP NOT NULL;
+ALTER TABLE public.contractor_payments ALTER COLUMN account_type DROP DEFAULT;
 
 DO $$ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_contractor_payments_account_type' AND conrelid = 'public.contractor_payments'::regclass) THEN

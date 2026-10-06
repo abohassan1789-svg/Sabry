@@ -64,6 +64,7 @@ from app.services.contracting_approval import APPROVED, ApprovalError, approved_
 from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_payment_service import (
     ACCOUNT_TYPES,
+    CURRENT_BALANCE,
     GENERAL_LABEL,
     PAYMENT_METHODS,
     REFERENCE_MAX,
@@ -71,6 +72,7 @@ from app.services.contractor_payment_service import (
     PaymentError,
     companies_of,
     contractor_summary,
+    extract_account,
     extracts_of,
     general_paid,
     method_text,
@@ -104,7 +106,7 @@ CARD_COLUMNS = 3
 GENERAL = 0
 GENERAL_TEXT = "— دفعة عامة (بدون مستخلص) —"
 AUTO = object()  # select(): «pick the latest extract» (None means general)
-ACCOUNT_PROMPT = "— اختار نوع الحساب —"  # نوع الحساب starts empty: saving without one is refused
+ACCOUNT_PROMPT = "— اختار نوع الحساب —"  # starts empty: a draft may stay so, اعتماد needs one
 
 _TABLE_QSS = (
     "QTableWidget { border:none; font-size:13px; font-weight:700; gridline-color:#E5E7EB; }"
@@ -271,6 +273,7 @@ class ContractorPaymentsScreen(QWidget):
         self.board_fields = PaymentFields()
         for fields in self.fields_pair:
             fields.amount.textChanged.connect(self._update_balance)
+            fields.account.currentIndexChanged.connect(self._update_balance)  # each type has its own balance
 
         self.setLayoutDirection(Qt.RightToLeft)
         self.setStyleSheet("QWidget { font-family: 'Segoe UI', 'Tahoma', 'Arial'; }")
@@ -1100,23 +1103,29 @@ class ContractorPaymentsScreen(QWidget):
             table.blockSignals(False)
 
     def current_balance(self) -> dict[str, Decimal] | None:
-        """Where the payment on screen leaves its extract — or, for a general payment,
-        the project (all the contractor's extracts on it). None: no project chosen."""
+        """Where the payment on screen leaves the balance of its نوع الحساب (user, 2026-10-07):
+        on its extract — or, for a general payment, on the project (all the contractor's extracts
+        on it). رصيد جاري = صافي المستخلص; an insurance = what the extracts held back for it.
+        None: no project, or no نوع الحساب, chosen."""
         record = self.current_record or {}
+        account_type = self.fields.account.currentData()
+        if account_type is None:
+            return None
         if self.extract_id is not None:
             row = self._catalog_row(self.extract_id)
             if row is None:
                 return None
-            net, paid = row["net"], row["paid"]
+            net, paid = extract_account(row, account_type)
             mine = str(record.get("extract_id")) == str(self.extract_id)
         elif self.project_id is not None:
             on_project = project_balance(self.catalog, self.general, self.contractor_id, self.company_id,
-                                         self.project_id)
+                                         self.project_id, account_type)
             net, paid = on_project["net"], on_project["paid"]
             mine = (record.get("extract_id") is None and str(record.get("contractor_id")) == str(self.contractor_id)
                     and str(record.get("project_id")) == str(self.project_id))
         else:
             return None
+        mine = mine and record.get("account_type") == account_type  # saved under this type
         saved = to_decimal(record.get("amount")) if self.mode != "new" and mine else Decimal("0")
         # An approved payment is already inside ``paid`` (a draft is not): count it once, as «this».
         counted = saved if record.get("status") == APPROVED else Decimal("0")
@@ -1127,23 +1136,38 @@ class ContractorPaymentsScreen(QWidget):
         if not hasattr(self, "tabs"):
             return
         balance = self.current_balance()
-        general = self.extract_id is None
-        self._captions["tree_stat_net"].setText("صافي مستخلصات المشروع" if general else "صافي المستخلص")
-        self._captions["tree_stat_remaining"].setText("المتبقي على المشروع بعد الدفعة" if general else "المتبقي بعد الدفعة")
-        self.board_remaining_caption.setText(
-            "المتبقي على المشروع بعد الدفعة" if general else "المتبقي على المستخلص بعد الدفعة")
+        captions = self._balance_captions()
+        for key in ("net", "previous", "remaining"):
+            self._captions[f"tree_stat_{key}"].setText(captions[key])
+        self.board_remaining_caption.setText(captions["board"])
         for key, label in self.tree_stats.items():
             label.setText(_money(balance[key]) if balance else "—")
         self.board_remaining.setText(_money(balance["remaining"]) if balance else "—")
         over = bool(balance) and balance["remaining"] < 0
-        target = "المشروع" if general else "المستخلص"
-        text = f"⚠ المبلغ أكبر من المتبقي على {target} بـ {_money(-balance['remaining'])}" if over else ""
+        text = f"⚠ المبلغ أكبر من {captions['left']} بـ {_money(-balance['remaining'])}" if over else ""
         for warning in (self.tree_warning, self.board_warning):
             warning.setText(text)
             warning.setVisible(over)
         color = RED if over else AMBER
         self.tree_stats["remaining"].setStyleSheet(f"font-size:18px; font-weight:900; color:{color}; background:transparent;")
         self.board_remaining.setStyleSheet(f"font-size:15px; font-weight:900; color:{color}; background:transparent;")
+
+    def _balance_captions(self) -> dict[str, str]:
+        """The balance tiles' captions for the نوع الحساب and target (extract or project) on screen."""
+        general = self.extract_id is None
+        target = "المشروع" if general else "المستخلص"
+        account_type = self.fields.account.currentData()
+        if account_type in (None, CURRENT_BALANCE):
+            return {"net": "صافي مستخلصات المشروع" if general else "صافي المستخلص",
+                    "previous": "المدفوع سابقاً",
+                    "remaining": "المتبقي على المشروع بعد الدفعة" if general else "المتبقي بعد الدفعة",
+                    "board": f"المتبقي على {target} بعد الدفعة",
+                    "left": f"المتبقي على {target}"}
+        return {"net": f"{account_type} المحجوز من {'مستخلصات المشروع' if general else 'المستخلص'}",
+                "previous": f"المصروف من {account_type} سابقاً",
+                "remaining": f"المتبقي من {account_type} بعد الدفعة",
+                "board": f"المتبقي من {account_type} بعد الدفعة",  # the board's strip is narrow
+                "left": f"المتبقي من {account_type} على {target}"}
 
     # -- loading -----------------------------------------------------------------------------------
 
@@ -1214,15 +1238,11 @@ class ContractorPaymentsScreen(QWidget):
             return
         data = dict(self.fields.values(), contractor_id=self.contractor_id, project_id=self.project_id,
                     extract_id=self.extract_id)
-        if data["account_type"] is None:  # required (user, 2026-10-07): ask before anything else
-            QMessageBox.warning(self, "لا يمكن الحفظ", "اختار نوع الحساب.")
-            self.fields.account.setFocus()
-            return
         balance = self.current_balance()
         if balance and balance["remaining"] < 0 and to_decimal(data["amount"]) > 0:
             answer = QMessageBox.question(
                 self, "المبلغ أكبر من المتبقي",
-                f"المبلغ أكبر من المتبقي على {'المشروع' if self.extract_id is None else 'المستخلص'} "
+                f"المبلغ أكبر من {self._balance_captions()['left']} "
                 f"بـ {_money(-balance['remaining'])}.\nتحفظ الدفعة برضه؟",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )

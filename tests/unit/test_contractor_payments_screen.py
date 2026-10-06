@@ -221,7 +221,6 @@ class _NoDb:
     ({"amount": "0"}, "مبلغ"),
     ({"amount": "-5"}, "مبلغ"),
     ({"notes": "x" * 501}, "الملاحظات"),
-    ({"account_type": None}, "نوع الحساب"),
     ({"account_type": "خزينة"}, "نوع الحساب"),
 ])
 def test_save_refuses_bad_payments(change, message):
@@ -381,6 +380,7 @@ def test_clicking_a_card_selects_its_extract(screen):
 
 def test_new_payment_on_the_selected_extract(screen):
     screen.new_payment()
+    _pick_account(screen.fields)  # each نوع الحساب has its own balance
     assert screen.mode == "new" and not screen.tabs.tabBar().isEnabled()
     fields = screen.tree_fields
     fields.amount.setText("30000")
@@ -388,7 +388,6 @@ def test_new_payment_on_the_selected_extract(screen):
     assert screen.tree_stats["previous"].text() == "200,000.00"
     assert screen.tree_stats["this"].text() == "30,000.00"
     assert screen.tree_stats["remaining"].text() == "70,000.00"
-    _pick_account(screen.fields)
     screen.save_record()
     data, record_id = screen.service.saved[-1]
     assert record_id is None
@@ -398,6 +397,7 @@ def test_new_payment_on_the_selected_extract(screen):
 
 def test_paying_more_than_is_left_warns_and_asks(screen, monkeypatch):
     screen.new_payment()
+    _pick_account(screen.fields)  # each نوع الحساب has its own balance
     screen.tree_fields.amount.setText("150000")
     assert not screen.tree_warning.isHidden()
     assert "50,000.00" in screen.tree_warning.text()
@@ -493,10 +493,10 @@ def test_the_tree_has_a_general_branch_per_project(screen):
 def test_saving_a_general_payment_sends_no_extract(screen):
     screen._cards[GENERAL].click()
     screen.new_payment()
+    _pick_account(screen.fields)  # each نوع الحساب has its own balance
     screen.tree_fields.amount.setText("10000")
     assert screen.tree_stats["previous"].text() == "320,000.00"
     assert screen.tree_stats["remaining"].text() == "70,000.00"
-    _pick_account(screen.fields)
     screen.save_record()
     data, record_id = screen.service.saved[-1]
     assert record_id is None
@@ -729,17 +729,29 @@ def test_a_new_payment_starts_without_an_account_type(screen):
         screen.cancel_edit()
 
 
-def test_saving_without_an_account_type_is_refused(screen, monkeypatch):
-    warnings = []
-    monkeypatch.setattr(screen_module.QMessageBox, "warning", lambda *a, **k: warnings.append(a[2]))
+def test_a_draft_may_wait_for_its_account_type(screen):
+    """«يحفظ من غيرها عادي انما اعتماد لازم يختارها» (user, 2026-10-07)."""
     screen.new_payment()
     screen.fields.amount.setText("30000")
     screen.save_record()
-    assert screen.service.saved == [] and screen.mode == "new"
-    assert warnings == ["اختار نوع الحساب."]
-    _pick_account(screen.fields, "تأمين أعمال")
-    screen.save_record()
-    assert screen.service.saved[-1][0]["account_type"] == "تأمين أعمال" and screen.mode == "view"
+    assert screen.service.saved[-1][0]["account_type"] is None and screen.mode == "view"
+
+
+def test_service_saves_a_draft_without_account_type_but_refuses_to_approve_it():
+    from app.services.contracting_approval import ApprovalError
+
+    db = _RecordingDb(None)
+    ContractorPaymentService(db).save_payment(
+        {"contractor_id": 1, "project_id": 11, "extract_id": None, "payment_date": "2026-09-26", "amount": "5"})
+    assert db.sql[-1][1][-1] is None
+
+    class Db:
+        def fetch_one(self, sql, params=None):
+            assert sql.startswith("SELECT account_type")
+            return {"account_type": None}
+
+    with pytest.raises(ApprovalError, match="نوع الحساب"):
+        ContractorPaymentService(Db()).approve(902)
 
 
 def test_a_saved_payment_opens_with_its_account_type_in_both_tabs(admin_screen):
@@ -753,3 +765,85 @@ def test_a_saved_payment_opens_with_its_account_type_in_both_tabs(admin_screen):
     assert screen.fields.account.isEnabled()
     screen.save_record()
     assert screen.service.saved[-1][0]["account_type"] == "تأمينات اجتماعية"
+
+
+# --- each نوع الحساب pays out of its own balance (user, 2026-10-07) -------------------------------
+
+from app.services.contractor_payment_service import extract_account  # noqa: E402
+
+_HELD = {"works_value": Decimal("100000"), "vat_pct": 0, "advance_payment_pct": 0, "withholding_tax_pct": 0,
+         "works_insurance_pct": Decimal("5"), "social_insurance_pct": Decimal("2.5"), "other_deductions": 0,
+         "paid": Decimal("40000"), "paid_works_insurance": Decimal("1000"), "paid_social_insurance": 0}
+
+
+def test_an_extract_holds_each_insurance_and_counts_its_own_payments():
+    row = with_net([dict(_HELD)])[0]
+    assert row["net"] == Decimal("92500.00")  # 100,000 − 5% − 2.5%
+    assert extract_account(row, "رصيد جاري") == (Decimal("92500.00"), Decimal("40000"))
+    assert extract_account(row, "تأمين أعمال") == (Decimal("5000.00"), Decimal("1000"))
+    assert extract_account(row, "تأمينات اجتماعية") == (Decimal("2500.00"), Decimal("0"))
+    assert row["remaining"] == Decimal("52500.00")  # only رصيد جاري payments come off صافي المستخلص
+
+
+def test_general_payments_count_for_their_own_account_type_only():
+    general = {(1, 11, "رصيد جاري"): Decimal("20000"), (1, 11, "تأمين أعمال"): Decimal("300"),
+               (1, 12, "تأمين أعمال"): Decimal("7")}
+    assert general_paid(general, 1, 11) == Decimal("20000")
+    assert general_paid(general, 1, 11, "تأمين أعمال") == Decimal("300")
+    assert general_paid(general, 1, None, "تأمين أعمال") == Decimal("307")
+    assert general_paid({(1, 11): Decimal("5")}, 1, 11) == Decimal("5")  # an untyped key = رصيد جاري
+
+
+def test_project_balance_per_account_type():
+    rows = [dict(_HELD, extract_id=1, contractor_id=1, company_id=10, project_id=11),
+            dict(_HELD, extract_id=2, contractor_id=1, company_id=10, project_id=11, paid_works_insurance=0)]
+    catalog = with_net(rows)
+    general = {(1, 11, "تأمين أعمال"): Decimal("500")}
+    works = project_balance(catalog, general, 1, 10, 11, "تأمين أعمال")
+    assert works == {"net": Decimal("10000.00"), "paid": Decimal("1500"), "remaining": Decimal("8500.00")}
+    current = project_balance(catalog, general, 1, 10, 11)
+    assert current["net"] == Decimal("185000.00") and current["paid"] == Decimal("80000")
+
+
+def _hold_insurance(screen, extract_id=501, works="15000", paid_works="5000"):
+    row = screen._catalog_row(extract_id)
+    row.update(works_insurance=Decimal(works), paid_works_insurance=Decimal(paid_works))
+
+
+def test_insurance_payment_on_an_extract_shows_that_extracts_insurance(screen):
+    screen.new_payment()
+    _hold_insurance(screen)
+    assert screen.tree_stats["net"].text() == "—"  # no نوع الحساب yet: no balance
+    _pick_account(screen.fields, "تأمين أعمال")
+    screen.fields.amount.setText("2000")
+    assert screen._captions["tree_stat_net"].text() == "تأمين أعمال المحجوز من المستخلص"
+    assert (screen.tree_stats["net"].text(), screen.tree_stats["previous"].text(),
+            screen.tree_stats["remaining"].text()) == ("15,000.00", "5,000.00", "8,000.00")
+    _pick_account(screen.fields, "رصيد جاري")  # back to صافي المستخلص − its رصيد جاري payments
+    assert screen.tree_stats["net"].text() == "300,000.00" and screen.tree_stats["previous"].text() == "200,000.00"
+
+
+def test_general_insurance_payment_shows_the_whole_project(screen):
+    _hold_insurance(screen, 501, "15000", "5000")
+    _hold_insurance(screen, 500, "5000", "0")
+    screen.general = {(1, 11, "تأمين أعمال"): Decimal("1000")}
+    screen.new_payment()
+    screen.tree_extract.setCurrentIndex(screen.tree_extract.findData(GENERAL))
+    _pick_account(screen.fields, "تأمين أعمال")
+    screen.fields.amount.setText("500")
+    assert screen._captions["tree_stat_net"].text() == "تأمين أعمال المحجوز من مستخلصات المشروع"
+    assert (screen.tree_stats["net"].text(), screen.tree_stats["previous"].text(),
+            screen.tree_stats["remaining"].text()) == ("20,000.00", "6,000.00", "13,500.00")
+
+
+def test_paying_more_than_the_insurance_left_warns_and_asks(screen, monkeypatch):
+    asked = []
+    monkeypatch.setattr(screen_module.QMessageBox, "question",
+                        lambda *a, **k: asked.append(a[2]) or screen_module.QMessageBox.No)
+    screen.new_payment()
+    _hold_insurance(screen)
+    _pick_account(screen.fields, "تأمين أعمال")
+    screen.fields.amount.setText("12000")
+    assert "المتبقي من تأمين أعمال على المستخلص" in screen.tree_warning.text()
+    screen.save_record()
+    assert screen.service.saved == [] and "المتبقي من تأمين أعمال على المستخلص بـ 2,000.00" in asked[0]
