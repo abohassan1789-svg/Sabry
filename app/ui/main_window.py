@@ -31,6 +31,7 @@ from app.services.permission_service import PermissionService
 from app.services.permissions_sync_service import PermissionsSyncService
 from app.services.review_data_service import ReviewDataService, TABLE_SPECS
 from app.ui.common.live_lists import LiveLists
+from app.ui.common.searchable_combos import enable_combo_search
 from app.ui.common.theme import GREEN, GREEN_DARK
 from app.ui.screens.attachments_page import AttachmentsPage
 from app.ui.screens.backup_screen import BackupManagementScreen
@@ -169,6 +170,15 @@ HIDDEN_NAV_SECTIONS: frozenset[str] = frozenset(
 # Sections whose header stays in the sidebar even when none of their items is
 # shown (user request 2026-09-26: «سيب القسم» — التقارير kept for reports to come).
 KEEP_EMPTY_NAV_SECTIONS: frozenset[str] = frozenset({"reports"})
+
+# Screens whose drop lists can be searched by any part of an item (user, 2026-10-07).
+# Only screens shown in the sidebar, added phase by phase: 1 = «المقاولات».
+SEARCHABLE_COMBO_SCREENS: frozenset[str] = frozenset(
+    {
+        "contractors_dashboard", "company_info", "contractors", "company_projects",
+        "contractor_contracts", "contractor_extracts", "contractor_payments",
+    }
+)
 
 # Reports: (report key, sidebar label, screen class).
 REPORTS = (
@@ -783,6 +793,8 @@ class ReviewMainWindow(QMainWindow):
         window.destroyed.connect(lambda *_a, k=key: self.open_windows.pop(k, None))
         self.open_windows[key] = window
         self.live_lists.register(window)
+        if key in SEARCHABLE_COMBO_SCREENS:
+            enable_combo_search(window)
         return window
 
     def open_screen(self, key: str) -> None:
