@@ -176,21 +176,27 @@ def test_a_dialog_of_an_enabled_screen_is_covered_too(qt_app):
     dialog.close()
 
 
-# --- the screens covered: phase 1 = «المقاولات», phase 2 = «التقارير» -----------------------
+# --- the screens covered: 1 = «المقاولات», 2 = «التقارير», 3 = dashboards + «النظام» ----------
 
 def _visible_sidebar_keys(section_id):
     items = next(items for section, _t, _i, items in main_window.NAV_SECTIONS if section == section_id)
     return {key for key, _label, _icon in items if key not in main_window.HIDDEN_NAV_KEYS}
 
 
-def test_the_contracting_screens_and_reports_are_covered():
-    contracting = _visible_sidebar_keys("contracting")
+def test_every_screen_shown_in_the_sidebar_is_covered():
     reports = _visible_sidebar_keys("reports")
     assert reports == {
         "contractor_contracts_report", "contractor_extracts_report",
         "contractor_advance_report", "contractor_statement_report",
     }
-    assert main_window.SEARCHABLE_COMBO_SCREENS == contracting | reports
+    visible_sections = {
+        section for section, _t, _i, _items in main_window.NAV_SECTIONS
+        if section not in main_window.HIDDEN_NAV_SECTIONS
+    }
+    assert visible_sections == {"contracting", "reports", "system"}
+    pinned = {"crm_dashboard", "executive_dashboard"}  # لوحة التحكم is enabled where it's built
+    expected = pinned.union(*(_visible_sidebar_keys(section) for section in visible_sections))
+    assert main_window.SEARCHABLE_COMBO_SCREENS == expected
 
 
 def test_hidden_screens_are_not_covered():
@@ -267,3 +273,52 @@ def test_letters_typed_while_the_list_rolls_open_are_kept(qt_app):
     finally:
         box.hidePopup()
         host.close()
+
+
+class _Anything:
+    """A service stand-in: every call answers an empty list."""
+
+    def __init__(self, **answers):
+        self._answers = answers
+
+    def __getattr__(self, name):
+        return lambda *a, **k: self._answers.get(name, [])
+
+
+def test_users_screen_role_list_is_searchable(qt_app):
+    from app.ui.screens.users_page import UsersPage
+
+    roles = [{"id": 1, "role_name_ar": "مدير النظام"}, {"id": 2, "role_name_ar": "محاسب"},
+             {"id": 3, "role_name_ar": "مدخل بيانات"}]
+    page = UsersPage(_Anything(), _Anything(list_roles=roles))
+    enable_combo_search(page)
+    page.show()
+    page.set_mode("new")
+    qt_app.processEvents()
+    page.role_combo.setFocus()
+    _type(page.role_combo, "بيان")
+    assert _shown(page.role_combo) == ["مدخل بيانات"]
+    QTest.keyClick(page.role_combo.view(), Qt.Key_Return)
+    assert page.role_combo.currentData() == 3
+    page.close()
+
+
+def test_connection_settings_ssl_list_is_searchable_and_address_stays_free(qt_app):
+    """إعدادات الاتصال: «وضع SSL» is searched; the server address accepts any text."""
+    from app.ui.screens.connection_screen import ConnectionSettingsScreen
+
+    screen = ConnectionSettingsScreen()
+    enable_combo_search(screen)
+    screen.show()
+    qt_app.processEvents()
+    ssl = screen.widget.cmb_ssl
+    ssl.setFocus()
+    _type(ssl, "full")
+    assert _shown(ssl) == ["verify-full"]
+    ssl.hidePopup()
+    address = screen.widget.cmb_address
+    address.lineEdit().setFocus()
+    address.lineEdit().clear()
+    _type(address.lineEdit(), "10.0.0.5")
+    assert not address.view().isVisible() and address.currentText() == "10.0.0.5"
+    screen.close()
