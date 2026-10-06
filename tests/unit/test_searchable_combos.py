@@ -176,15 +176,25 @@ def test_a_dialog_of_an_enabled_screen_is_covered_too(qt_app):
     dialog.close()
 
 
-# --- phase 1: the contracting screens -------------------------------------------------------
+# --- the screens covered: phase 1 = «المقاولات», phase 2 = «التقارير» -----------------------
 
-def test_phase_one_covers_the_contracting_screens_only():
-    assert main_window.SEARCHABLE_COMBO_SCREENS == {
-        "contractors_dashboard", "company_info", "contractors", "company_projects",
-        "contractor_contracts", "contractor_extracts", "contractor_payments",
+def _visible_sidebar_keys(section_id):
+    items = next(items for section, _t, _i, items in main_window.NAV_SECTIONS if section == section_id)
+    return {key for key, _label, _icon in items if key not in main_window.HIDDEN_NAV_KEYS}
+
+
+def test_the_contracting_screens_and_reports_are_covered():
+    contracting = _visible_sidebar_keys("contracting")
+    reports = _visible_sidebar_keys("reports")
+    assert reports == {
+        "contractor_contracts_report", "contractor_extracts_report",
+        "contractor_advance_report", "contractor_statement_report",
     }
-    contracting = next(items for section, _t, _i, items in main_window.NAV_SECTIONS if section == "contracting")
-    assert {key for key, _label, _icon in contracting} == main_window.SEARCHABLE_COMBO_SCREENS
+    assert main_window.SEARCHABLE_COMBO_SCREENS == contracting | reports
+
+
+def test_hidden_screens_are_not_covered():
+    assert not main_window.SEARCHABLE_COMBO_SCREENS & main_window.HIDDEN_NAV_KEYS
 
 
 def test_payments_screen_contractor_list_is_searchable(qt_app, monkeypatch):
@@ -205,4 +215,25 @@ def test_payments_screen_contractor_list_is_searchable(qt_app, monkeypatch):
     QTest.keyClick(picker.view(), Qt.Key_Return)
     assert picker.currentData() == 2
     assert (screen.company_id, screen.project_id) == (20, 21)  # the screen's own cascade still runs
+    screen.close()
+
+
+def test_report_contractor_filter_is_searchable(qt_app, tmp_path):
+    from PySide6.QtCore import QSettings
+
+    from tests.unit.test_contractor_statement_report import FakeService
+    from app.ui.screens.contractor_statement_report_screen import ContractorStatementReportScreen
+
+    settings = QSettings(str(tmp_path / "report.ini"), QSettings.IniFormat)
+    screen = ContractorStatementReportScreen(FakeService(), settings=settings)
+    enable_combo_search(screen)
+    screen.resize(1700, 900)
+    screen.show()
+    qt_app.processEvents()
+    picker = screen.contractor_combo
+    picker.setFocus()
+    _type(picker, "الصفا")
+    assert [text for text in _shown(picker) if text] == [picker.itemText(picker.findData(2))]
+    QTest.keyClick(picker.view(), Qt.Key_Return)
+    assert picker.currentData() == 2
     screen.close()

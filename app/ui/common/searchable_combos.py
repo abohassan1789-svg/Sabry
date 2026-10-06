@@ -21,7 +21,16 @@ import re
 
 from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QKeyEvent
-from PySide6.QtWidgets import QAbstractItemView, QApplication, QComboBox, QCompleter, QLineEdit, QListView, QWidget
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QComboBox,
+    QCompleter,
+    QLineEdit,
+    QListView,
+    QStyle,
+    QWidget,
+)
 
 _HOOKED = "_searchHooked"
 _ENABLED = "comboSearchEnabled"
@@ -85,6 +94,13 @@ class _ComboSearch(QObject):
             self.edit.setLayoutDirection(Qt.RightToLeft)
             self.edit.setStyleSheet(_EDIT_QSS)
             layout.insertWidget(0, self.edit)
+            if not self.combo.style().styleHint(QStyle.SH_ComboBox_Popup, None, self.combo):
+                # A plain drop-down scrolls with its scroll bar; Qt still flashes the
+                # popup-menu scroll arrows as an empty strip above or under the matches.
+                # (Done by style sheet: wrapping those private widgets in PySide crashes.)
+                container.setStyleSheet(
+                    container.styleSheet() + "QComboBoxPrivateScroller { max-height:0px; min-height:0px; }"
+                )
         return self.edit
 
     # --- events -------------------------------------------------------------

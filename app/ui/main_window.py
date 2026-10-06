@@ -172,11 +172,13 @@ HIDDEN_NAV_SECTIONS: frozenset[str] = frozenset(
 KEEP_EMPTY_NAV_SECTIONS: frozenset[str] = frozenset({"reports"})
 
 # Screens whose drop lists can be searched by any part of an item (user, 2026-10-07).
-# Only screens shown in the sidebar, added phase by phase: 1 = «المقاولات».
+# Only screens shown in the sidebar, added phase by phase: 1 = «المقاولات», 2 = «التقارير».
 SEARCHABLE_COMBO_SCREENS: frozenset[str] = frozenset(
     {
         "contractors_dashboard", "company_info", "contractors", "company_projects",
         "contractor_contracts", "contractor_extracts", "contractor_payments",
+        "contractor_contracts_report", "contractor_extracts_report",
+        "contractor_advance_report", "contractor_statement_report",
     }
 )
 
