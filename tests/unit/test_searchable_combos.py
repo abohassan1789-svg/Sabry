@@ -237,3 +237,33 @@ def test_report_contractor_filter_is_searchable(qt_app, tmp_path):
     QTest.keyClick(picker.view(), Qt.Key_Return)
     assert picker.currentData() == 2
     screen.close()
+
+
+def test_letters_typed_while_the_list_rolls_open_are_kept(qt_app):
+    """On Windows an editable list rolls open over ~150 ms instead of showing at once.
+    The user's complaint (2026-10-07, شاشة المقاولين): typing on a closed list did
+    nothing until an item had been picked from it once, because the letters typed
+    before the list had finished opening were wiped when it appeared."""
+    host = QWidget()
+    QVBoxLayout(host)
+    box = QComboBox()  # like the read-only choice lists of BaseCrudScreen
+    box.setEditable(True)
+    box.lineEdit().setReadOnly(True)
+    box.addItem("", None)
+    box.addItems(NAMES)
+    host.layout().addWidget(box)
+    enable_combo_search(host)
+    host.resize(400, 300)
+    host.show()
+    box.showPopup = lambda: None  # still rolling open: not shown yet
+    try:
+        for letter in "سعيد":
+            _type(box.lineEdit(), letter)
+        assert not box.view().isVisible()
+        QComboBox.showPopup(box)  # the animation ends: the list appears
+        qt_app.processEvents()
+        assert box.findChild(_ComboSearch).text == "سعيد"
+        assert _shown(box) == ["أحمد سعيد", "سعيد حسن"]
+    finally:
+        box.hidePopup()
+        host.close()

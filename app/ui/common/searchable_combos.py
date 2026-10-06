@@ -71,6 +71,7 @@ class _ComboSearch(QObject):
         self.view: QAbstractItemView | None = None
         self._chrome: int | None = None  # popup height that isn't the list (frame, box, arrows)
         self._list_height = 0
+        self._pending: str | None = None  # typed before the list finished opening
 
     # --- wiring -------------------------------------------------------------
     def _ensure_view_hooked(self) -> None:
@@ -112,9 +113,21 @@ class _ComboSearch(QObject):
         if self.view.isVisible():  # the list is already open: keep adding to the search
             self.set_text(self.text + event.text())
             return True
+        if self._pending is not None:  # still rolling open (Windows animates it): keep the letters
+            self._pending += event.text()
+            return True
+        self._pending = event.text()
         self.combo.showPopup()
-        self.set_text(event.text())
+        if self.view.isVisible() and self._pending is not None:  # shown without its Show reaching us
+            self.set_text(self._pending)
+            self._pending = None
+        # A popup that never opens must not swallow the next letters.
+        QTimer.singleShot(1500, self, self._drop_pending)
         return True
+
+    def _drop_pending(self) -> None:
+        if self.view is not None and not self.view.isVisible():
+            self._pending = None
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802 (Qt API)
         if watched is not self.view:
@@ -122,10 +135,11 @@ class _ComboSearch(QObject):
         kind = event.type()
         if kind == QEvent.Show:
             self._ensure_edit()
-            self.text = ""
+            # Letters typed on the closed combo, or while the list was rolling open.
+            self.text, self._pending = self._pending or "", None
             self._apply()
         elif kind == QEvent.Hide:
-            self.text = ""
+            self.text, self._pending = "", None
             self._unhide_all()
         elif kind == QEvent.KeyPress:
             return self._view_key(event)
