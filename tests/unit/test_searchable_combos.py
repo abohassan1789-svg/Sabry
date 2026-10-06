@@ -322,3 +322,105 @@ def test_connection_settings_ssl_list_is_searchable_and_address_stays_free(qt_ap
     _type(address.lineEdit(), "10.0.0.5")
     assert not address.view().isVisible() and address.currentText() == "10.0.0.5"
     screen.close()
+
+
+# --- phase 4: an item picked by searching is the one that gets saved -----------------------
+
+def _pick(combo, text):
+    combo.setFocus()
+    _type(combo.lineEdit() if combo.isEditable() else combo, text)
+    assert combo.view().isVisible() and len([t for t in _shown(combo) if t]) == 1, _shown(combo)
+    QTest.keyClick(combo.view(), Qt.Key_Return)
+    assert not combo.view().isVisible()
+
+
+def _quiet(monkeypatch, *modules):
+    for module in modules:
+        for name in ("information", "warning", "critical"):
+            monkeypatch.setattr(module.QMessageBox, name, lambda *a, **k: None)
+        monkeypatch.setattr(module.QMessageBox, "question", lambda *a, **k: module.QMessageBox.Yes)
+
+
+def test_contracts_saves_the_contractor_found_by_search(qt_app, monkeypatch):
+    from tests.unit.test_contractor_contracts_screen import FakeService
+    from app.ui.screens import contractor_contracts_screen as screen_module
+
+    _quiet(monkeypatch, screen_module)
+    screen = screen_module.ContractorContractsScreen(FakeService())
+    enable_combo_search(screen)
+    screen.resize(1700, 860)
+    screen.show()
+    screen.tree.setCurrentItem(screen._tree_items[("project", 10)])
+    screen.new_contract()
+    form = screen.tree_form
+    _pick(form.contractor, "حديث")
+    form.contract_value.setText("750000")
+    screen.save_record()
+    data, record_id = screen.service.saved[-1]
+    assert record_id is None and data["contractor_id"] == 2 and data["project_id"] == 10
+    screen.close()
+
+
+def test_contractors_saves_the_type_found_by_search(qt_app, monkeypatch):
+    from tests.unit.test_contractors_screen import FakeBackend, FakeService
+    from app.ui.screens import base_crud_screen
+    from app.ui.screens import contractors_screen as screen_module
+
+    _quiet(monkeypatch, screen_module, base_crud_screen)
+    backend = FakeBackend()
+    monkeypatch.setattr(screen_module.ContractorsScreen, "_backend", lambda self: backend)
+    screen = screen_module.ContractorsScreen(FakeService())
+    enable_combo_search(screen)
+    screen.resize(1700, 860)
+    screen.show()
+    screen.new_record()
+    screen.inputs["contractor_name"].setText("مقاول جديد")
+    _pick(screen.inputs["contractor_type"], "اعلان")  # «دعاية وإعلان», typed without the hamza
+    screen.save_record()
+    payload, record_id = screen.service.saved[-1]
+    assert record_id is None and payload["contractor_type"] == "دعاية وإعلان"
+    screen.close()
+
+
+def test_payments_saves_the_method_found_by_search(qt_app, monkeypatch):
+    from tests.unit.test_contractor_payments_screen import FakeService
+    from app.ui.screens import contractor_payments_screen as screen_module
+
+    _quiet(monkeypatch, screen_module)
+    screen = screen_module.ContractorPaymentsScreen(FakeService())
+    enable_combo_search(screen)
+    screen.resize(1700, 860)
+    screen.show()
+    screen.new_payment()
+    fields = screen.tree_fields
+    fields.amount.setText("30000")
+    _pick(fields.method, "حويل")
+    fields.reference.setText("784512")
+    screen.save_record()
+    data, record_id = screen.service.saved[-1]
+    assert record_id is None and data["payment_method"] == "تحويل" and data["extract_id"] == 501
+    screen.close()
+
+
+def test_users_saves_the_role_found_by_search(qt_app, monkeypatch):
+    from app.ui.screens import users_page as page_module
+
+    _quiet(monkeypatch, page_module)
+    created = []
+
+    class Auth(_Anything):
+        def create_user(self, payload, password):
+            created.append(payload)
+            return 7
+
+    roles = [{"id": 1, "role_name_ar": "مدير النظام"}, {"id": 2, "role_name_ar": "محاسب"},
+             {"id": 3, "role_name_ar": "مدخل بيانات"}]
+    page = page_module.UsersPage(Auth(), _Anything(list_roles=roles))
+    enable_combo_search(page)
+    page.show()
+    page.new_user()
+    page.username.setText("mona")
+    _pick(page.role_combo, "محاس")
+    page.save_user()
+    assert created and created[-1]["role_id"] == 2
+    page.close()
