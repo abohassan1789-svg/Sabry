@@ -154,7 +154,7 @@ class FakeService:
 
     def statement(self, **filters):
         self.last_filters = filters
-        if filters["contractor_id"] != 1:
+        if filters["contractor_id"] not in (None, 1):  # None = «الكل»: here, the one contractor with movements
             return empty_statement()
         accounts = build_accounts(CARD, EXTRACTS, PAYMENTS + [WORKS_PAYMENT], filters["date_from"], filters["date_to"])
         return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"]))
@@ -253,11 +253,45 @@ def test_column_chooser_hides_and_remembers(screen, settings):
     again.close()
 
 
-def test_no_contractor_no_statement(screen):
+def test_all_contractors_in_one_statement(screen):
+    """«الكل» in اسم المقاول lists every contractor's movements (user, 2026-10-07)."""
     screen.contractor_combo.setCurrentIndex(0)  # «الكل»
     screen.run_report()
-    assert screen.table.rowCount() == 0
-    assert "اختار المقاول" in screen.count_label.text()
+    assert screen.service.last_filters["contractor_id"] is None
+    assert screen.row_kinds[0] == ROW_OPENING and screen.row_kinds[-1] == ROW_TOTAL and len(screen.row_kinds) == 7
+    assert "بطاقات كل المقاولين" in _cell(screen, 0, "date")
+    assert "كل المقاولين" in screen.count_label.text()
+
+
+class _Db:
+    """Answers the statement's queries, keeping them to look at."""
+
+    def __init__(self):
+        self.queries = []
+
+    def fetch_one(self, sql, params=None):
+        self.queries.append((sql, params))
+        return {"current_balance": Decimal("100"), "works_insurance_amount": Decimal("20"),
+                "social_insurance_amount": Decimal("3")}
+
+    def fetch_all(self, sql, params=None):
+        self.queries.append((sql, params))
+        return []
+
+
+def test_service_all_contractors_adds_up_the_cards():
+    from app.services.contractor_statement_report_service import ContractorStatementReportService
+
+    db = _Db()
+    statement = ContractorStatementReportService(db).statement(contractor_id=None)
+    card_sql, card_params = db.queries[0]
+    assert "sum(d.current_balance)" in card_sql and "IN (SELECT" not in card_sql and card_params == []
+    assert all("contractor_id = %s" not in sql for sql, _p in db.queries)
+    assert statement["accounts"]["تأمين أعمال"]["opening"] == Decimal("20.00")
+    db = _Db()
+    ContractorStatementReportService(db).statement(company_id=10)  # «الكل» in one company
+    card_sql, card_params = db.queries[0]
+    assert "IN (SELECT k.contractor_id" in card_sql and card_params == [10]
 
 
 # -- column widths (user, 2026-10-02) ---------------------------------------------------------

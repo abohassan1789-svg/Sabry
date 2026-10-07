@@ -30,6 +30,10 @@ One statement per نوع الحساب (user, 2026-10-07), each with its own رص
   الاجتماعية»; an extract adds the insurance it held back.
 * A payment comes off its own type only (a payment without a type counts as رصيد جاري).
 * The extract lines are the same in the three (their «نوع الحساب» reads «كل الحسابات»).
+
+«الكل» in اسم المقاول (user, 2026-10-07): every approved contractor in one statement —
+the openings are their cards added up (with a company / project chosen, the cards of
+the contractors with a contract there), then all their movements by date.
 """
 
 from __future__ import annotations
@@ -185,23 +189,38 @@ def empty_statement() -> dict[str, Any]:
 
 
 class ContractorStatementReportService(ContractorContractsReportService):
-    """The filter choices are the contracts report's; ``statement`` needs a contractor."""
+    """The filter choices are the contracts report's; no contractor (``None``) = «الكل»."""
 
     def statement(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
                   project_id: Any = None, contractor_id: Any = None) -> dict[str, Any]:
-        if contractor_id in (None, ""):
-            return empty_statement()
-        row = self._db.fetch_one(
-            "SELECT current_balance, works_insurance_amount, social_insurance_amount FROM contractors "
-            "WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
-        )
-        if row is None:
-            return empty_statement()
-        where, params = ["k.contractor_id = %s"], [contractor_id]
+        everyone = contractor_id in (None, "")
+        where, params = ["TRUE"], []
+        if not everyone:
+            where, params = ["k.contractor_id = %s"], [contractor_id]
         for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id)):
             if value not in (None, ""):
                 where.append(clause)
                 params.append(value)
+        if everyone:
+            # Every approved contractor's card; with a company / project chosen, those with a contract there.
+            narrowed = len(where) > 1
+            row = self._db.fetch_one(
+                "SELECT COALESCE(sum(d.current_balance), 0) AS current_balance, "
+                "COALESCE(sum(d.works_insurance_amount), 0) AS works_insurance_amount, "
+                "COALESCE(sum(d.social_insurance_amount), 0) AS social_insurance_amount "
+                "FROM contractors d WHERE d.status = 'approved'"
+                + (" AND d.contractor_id IN (SELECT k.contractor_id FROM contractor_contracts k "
+                   "JOIN company_projects p ON p.project_id = k.project_id "
+                   "WHERE k.status = 'approved' AND " + " AND ".join(where) + ")" if narrowed else ""),
+                params if narrowed else [],
+            )
+        else:
+            row = self._db.fetch_one(
+                "SELECT current_balance, works_insurance_amount, social_insurance_amount FROM contractors "
+                "WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
+            )
+            if row is None:
+                return empty_statement()
         contracts = self._db.fetch_all(
             "SELECT k.contract_id, k.contract_value, k.advance_payment_pct FROM contractor_contracts k "
             "JOIN company_projects p ON p.project_id = k.project_id "
@@ -216,7 +235,8 @@ class ContractorStatementReportService(ContractorContractsReportService):
             "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
             "JOIN contractors d ON d.contractor_id = k.contractor_id "
             "JOIN company_projects p ON p.project_id = k.project_id "
-            "WHERE x.status = 'approved' AND k.status = 'approved' AND " + " AND ".join(where),
+            "WHERE x.status = 'approved' AND k.status = 'approved' AND d.status = 'approved' AND "
+            + " AND ".join(where),
             params,
         )
         payment_where = [w.replace("k.contractor_id", "y.contractor_id").replace("k.project_id", "y.project_id")
@@ -229,7 +249,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
             "JOIN company_projects p ON p.project_id = y.project_id "
             "LEFT JOIN contractor_extracts x ON x.extract_id = y.extract_id "
-            "WHERE y.status = 'approved' AND " + " AND ".join(payment_where),
+            "WHERE y.status = 'approved' AND d.status = 'approved' AND " + " AND ".join(payment_where),
             params,
         )
         accounts = build_accounts(row, extracts, payments, date_from, date_to)

@@ -390,11 +390,9 @@ class ContractorStatementReportScreen(ContractingReportBase):
         return (self.statement.get("accounts") or {}).get(self.account) or self.statement
 
     def _update_count(self) -> None:
-        if self.filters()["contractor_id"] is None:
-            self.count_label.setText("اختار المقاول لعرض كشف الحساب")
-            return
         totals = self._account_statement()["totals"]
-        self.count_label.setText(f"{TAB_TITLES[self.account]}: {totals['extracts_count']} مستخلصات · "
+        who = "كل المقاولين — " if self.filters()["contractor_id"] is None else ""
+        self.count_label.setText(f"{who}{TAB_TITLES[self.account]}: {totals['extracts_count']} مستخلصات · "
                                  f"{totals['payments_count']} دفعات")
 
     # -- filters -----------------------------------------------------------------------
@@ -460,13 +458,11 @@ class ContractorStatementReportScreen(ContractingReportBase):
         table.clearSpans()
         table.setRowCount(0)  # no stale cell from a longer run survives
         self.row_kinds = []
-        if self.contractor_combo.currentData() is None:
-            self.fitter.fit()
-            return
         statement = self._account_statement()
         date_from = self.filters()["date_from"]
+        cards = "بطاقات كل المقاولين" if self.contractor_combo.currentData() is None else "بطاقة المقاول"
         caption = (f"رصيد أول المدة — {TAB_TITLES[self.account]} قبل {date_text(date_from)}" if date_from
-                   else f"رصيد أول المدة — {CARD_FIELD[self.account]} في بطاقة المقاول")
+                   else f"رصيد أول المدة — {CARD_FIELD[self.account]} في {cards}")
         self._add_label_row(ROW_OPENING, caption, {"balance": statement["opening"]}, OPENING_BG)
         for line in statement["lines"]:
             self._add_line(line)
