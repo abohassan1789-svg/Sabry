@@ -21,6 +21,15 @@ typed الرصيد الجاري is the contractor's and always counts.
 
 Approved records only (مسودة / معتمد, 2026-10-02): a draft contractor has no
 statement, and draft contracts, extracts and payments are left out.
+
+One statement per نوع الحساب (user, 2026-10-07), each with its own رصيد أول المدة،
+مستخلصات، دفعات، متبقي and الرصيد التراكمي:
+
+* رصيد جاري: opens on the card's «الرصيد الجاري»; an extract adds its صافي المستخلص.
+* تأمين أعمال / تأمينات اجتماعية: open on the card's «تأمين الأعمال» / «التأمينات
+  الاجتماعية»; an extract adds the insurance it held back.
+* A payment comes off its own type only (a payment without a type counts as رصيد جاري).
+* The extract lines are the same in the three (their «نوع الحساب» reads «كل الحسابات»).
 """
 
 from __future__ import annotations
@@ -29,6 +38,12 @@ import datetime
 from typing import Any
 
 from app.services.contractor_contract_service import to_decimal
+from app.services.contractor_payment_service import (
+    ACCOUNT_TYPES,
+    CURRENT_BALANCE,
+    SOCIAL_INSURANCE,
+    WORKS_INSURANCE,
+)
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
 from app.services.contractor_extract_service import extract_amounts
 
@@ -39,6 +54,11 @@ RATE_KEYS = ("withholding_tax_pct", "advance_payment_pct", "vat_pct", "works_ins
 EXTRACT_AMOUNT_KEYS = ("works_value", "withholding_tax", "before_tax", "advance_payment", "vat_amount",
                        "works_insurance", "social_insurance", "other_deductions", "net")
 AMOUNT_KEYS = EXTRACT_AMOUNT_KEYS + ("paid",)
+ALL_ACCOUNTS = "كل الحسابات"  # «نوع الحساب» on an extract line: it feeds the three
+# What an extract adds to each نوع الحساب (an ``extract_amounts`` key), and the card's opening field.
+ACCOUNT_HELD = {CURRENT_BALANCE: "net", WORKS_INSURANCE: "works_insurance", SOCIAL_INSURANCE: "social_insurance"}
+ACCOUNT_OPENING = {CURRENT_BALANCE: "current_balance", WORKS_INSURANCE: "works_insurance_amount",
+                   SOCIAL_INSURANCE: "social_insurance_amount"}
 
 
 def _day(value: Any) -> datetime.date | None:
@@ -49,7 +69,8 @@ def _day(value: Any) -> datetime.date | None:
 
 def extract_line(extract: dict[str, Any]) -> dict[str, Any]:
     amounts = extract_amounts(extract)
-    line = {**extract, "kind": KIND_EXTRACT, "date": _day(extract.get("extract_date")), "paid": ZERO}
+    line = {**extract, "kind": KIND_EXTRACT, "date": _day(extract.get("extract_date")), "paid": ZERO,
+            "account_type": ALL_ACCOUNTS}
     line.update({key: to_decimal(extract.get(key)) for key in RATE_KEYS})
     line.update({key: amounts[key] for key in EXTRACT_AMOUNT_KEYS})
     return line
@@ -57,7 +78,8 @@ def extract_line(extract: dict[str, Any]) -> dict[str, Any]:
 
 def payment_line(payment: dict[str, Any]) -> dict[str, Any]:
     line = {**payment, "kind": KIND_PAYMENT, "date": _day(payment.get("payment_date")),
-            "paid": _money(to_decimal(payment.get("amount")))}
+            "paid": _money(to_decimal(payment.get("amount"))),
+            "account_type": payment.get("account_type") or CURRENT_BALANCE}
     line.update({key: ZERO for key in EXTRACT_AMOUNT_KEYS})
     return line
 
@@ -69,33 +91,67 @@ def _sort_key(line: dict[str, Any]) -> tuple:
     return date, 1, "", line.get("payment_id") or 0
 
 
-def build_statement(current_balance: Any, extracts: list[dict[str, Any]], payments: list[dict[str, Any]],
-                    date_from: Any = None, date_to: Any = None) -> dict[str, Any]:
-    """``{opening, lines, totals}`` for one contractor.
+def build_statement(opening_balance: Any, extracts: list[dict[str, Any]], payments: list[dict[str, Any]],
+                    date_from: Any = None, date_to: Any = None,
+                    account_type: str = CURRENT_BALANCE) -> dict[str, Any]:
+    """``{opening, lines, totals}`` of one نوع الحساب for one contractor.
 
-    *extracts* / *payments* may hold any dates: those before *date_from* go into
-    the opening balance, those after *date_to* are left out.
+    An extract adds what it holds for *account_type* (``ACCOUNT_HELD``); only the
+    payments of that type come off. *extracts* / *payments* may hold any dates:
+    those before *date_from* go into the opening balance, those after *date_to*
+    are left out. ``totals["held"]`` = what the period's extracts added.
     """
-    opening = _money(to_decimal(current_balance))
+    held_key = ACCOUNT_HELD[account_type]
+    opening = _money(to_decimal(opening_balance))
     lines = []
     for line in [extract_line(x) for x in extracts] + [payment_line(p) for p in payments]:
+        if line["kind"] == KIND_PAYMENT and line["account_type"] != account_type:
+            continue
+        line["held"] = line[held_key]
         day = line["date"]
         if date_to is not None and day is not None and day > date_to:
             continue
         if date_from is not None and day is not None and day < date_from:
-            opening += line["net"] - line["paid"]
+            opening += line["held"] - line["paid"]
             continue
         lines.append(line)
     lines.sort(key=_sort_key)
     balance = opening
     for line in lines:
-        balance += line["net"] - line["paid"]
+        balance += line["held"] - line["paid"]
         line["balance"] = balance
-    totals: dict[str, Any] = {key: sum((line[key] for line in lines), ZERO) for key in AMOUNT_KEYS}
+    totals: dict[str, Any] = {key: sum((line[key] for line in lines), ZERO) for key in AMOUNT_KEYS + ("held",)}
     totals.update(opening=opening, balance=balance,
                   extracts_count=sum(1 for line in lines if line["kind"] == KIND_EXTRACT),
                   payments_count=sum(1 for line in lines if line["kind"] == KIND_PAYMENT))
-    return {"opening": opening, "lines": lines, "totals": totals}
+    return {"opening": opening, "lines": lines, "totals": totals, "account_type": account_type}
+
+
+def build_accounts(card: dict[str, Any], extracts: list[dict[str, Any]], payments: list[dict[str, Any]],
+                   date_from: Any = None, date_to: Any = None) -> dict[str, dict[str, Any]]:
+    """The three statements, keyed by نوع الحساب; each opens on its field of the contractor's *card*."""
+    return {account: build_statement(card.get(ACCOUNT_OPENING[account]), extracts, payments, date_from, date_to,
+                                     account)
+            for account in ACCOUNT_TYPES}
+
+
+def account_timeline(accounts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """For the chart: the period's movements of all types by date, each with the three running
+    balances after it (``balances``); the first point is the openings."""
+    current = accounts[CURRENT_BALANCE]
+    payments = [line for account in ACCOUNT_TYPES for line in accounts[account]["lines"]
+                if line["kind"] == KIND_PAYMENT]
+    extracts = [line for line in current["lines"] if line["kind"] == KIND_EXTRACT]
+    balances = {account: accounts[account]["opening"] for account in ACCOUNT_TYPES}
+    points = [{"kind": "opening", "balances": dict(balances)}]
+    for line in sorted(extracts + payments, key=_sort_key):
+        if line["kind"] == KIND_EXTRACT:
+            for account in ACCOUNT_TYPES:
+                balances[account] += line[ACCOUNT_HELD[account]]
+        else:
+            balances[line["account_type"]] -= line["paid"]
+        points.append({"kind": line["kind"], "balances": dict(balances)})
+    return points
 
 
 def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, Any]],
@@ -117,10 +173,15 @@ def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, A
     }
 
 
-def empty_statement() -> dict[str, Any]:
-    statement = build_statement(0, [], [])
-    statement["contracts"] = contract_advance([], [])
+def _with_accounts(accounts: dict[str, dict[str, Any]], contracts: dict[str, Any]) -> dict[str, Any]:
+    """The رصيد جاري statement at the top (``opening``/``lines``/``totals``), plus every type's."""
+    statement = dict(accounts[CURRENT_BALANCE])
+    statement.update(accounts=accounts, timeline=account_timeline(accounts), contracts=contracts)
     return statement
+
+
+def empty_statement() -> dict[str, Any]:
+    return _with_accounts(build_accounts({}, [], []), contract_advance([], []))
 
 
 class ContractorStatementReportService(ContractorContractsReportService):
@@ -131,7 +192,8 @@ class ContractorStatementReportService(ContractorContractsReportService):
         if contractor_id in (None, ""):
             return empty_statement()
         row = self._db.fetch_one(
-            "SELECT current_balance FROM contractors WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
+            "SELECT current_balance, works_insurance_amount, social_insurance_amount FROM contractors "
+            "WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
         )
         if row is None:
             return empty_statement()
@@ -161,6 +223,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
                          for w in where]
         payments = self._db.fetch_all(
             "SELECT y.payment_id, y.payment_date, y.amount, y.payment_method, y.reference_no, y.extract_id, "
+            "y.account_type, "
             "x.extract_no, d.contractor_name "
             "FROM contractor_payments y "
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
@@ -169,6 +232,5 @@ class ContractorStatementReportService(ContractorContractsReportService):
             "WHERE y.status = 'approved' AND " + " AND ".join(payment_where),
             params,
         )
-        statement = build_statement(row.get("current_balance"), extracts, payments, date_from, date_to)
-        statement["contracts"] = contract_advance(contracts, extracts, date_to)
-        return statement
+        accounts = build_accounts(row, extracts, payments, date_from, date_to)
+        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to))

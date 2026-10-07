@@ -22,8 +22,12 @@ from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from app.services.contractor_statement_report_service import (
+    ALL_ACCOUNTS,
     KIND_EXTRACT,
     KIND_PAYMENT,
+    _with_accounts,
+    account_timeline,
+    build_accounts,
     build_statement,
     contract_advance,
     empty_statement,
@@ -65,6 +69,9 @@ PAYMENTS = [
 ]
 CONTRACTS = [{"contract_id": 100, "contract_value": Decimal("2000000"), "advance_payment_pct": Decimal("10")}]
 OPENING = Decimal("85000")
+# نوع الحساب (2026-10-07): the card's opening per type, and a تأمين أعمال payment.
+CARD = {"current_balance": OPENING, "works_insurance_amount": Decimal("2000"), "social_insurance_amount": Decimal("750")}
+WORKS_PAYMENT = dict(_payment(12, (2026, 4, 1), "5000"), account_type="تأمين أعمال")
 FROM, TO = datetime.date(2026, 2, 1), datetime.date(2026, 12, 31)
 
 
@@ -149,9 +156,8 @@ class FakeService:
         self.last_filters = filters
         if filters["contractor_id"] != 1:
             return empty_statement()
-        statement = build_statement(OPENING, EXTRACTS, PAYMENTS, filters["date_from"], filters["date_to"])
-        statement["contracts"] = contract_advance(CONTRACTS, EXTRACTS, filters["date_to"])
-        return statement
+        accounts = build_accounts(CARD, EXTRACTS, PAYMENTS + [WORKS_PAYMENT], filters["date_from"], filters["date_to"])
+        return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"]))
 
 
 @pytest.fixture(scope="module")
@@ -186,12 +192,12 @@ def test_opens_on_the_first_contractor(screen):
     assert screen.service.last_filters["contractor_id"] == 1
 
 
-def test_the_users_19_columns_in_order(screen):
-    assert len(COLUMNS) == 19
-    assert [header.replace("\n", " ") for _k, header, _t in COLUMNS[:4]] == [
-        "التاريخ", "اسم المقاول", "رقم المستخلص", "إجمالي المستخلص"]
+def test_the_users_columns_in_order(screen):
+    assert len(COLUMNS) == 20  # the user's 19 + «نوع الحساب» (2026-10-07)
+    assert [header.replace("\n", " ") for _k, header, _t in COLUMNS[:5]] == [
+        "التاريخ", "اسم المقاول", "رقم المستخلص", "نوع الحساب", "إجمالي المستخلص"]
     assert COLUMN_KEYS[-3:] == ("net", "paid", "balance")
-    assert len(DEFAULT_COLUMNS) == 14  # every column but the five rates
+    assert len(DEFAULT_COLUMNS) == 15  # every column but the five rates
     assert _visible(screen.table) == list(DEFAULT_COLUMNS)
 
 
@@ -213,10 +219,18 @@ def test_rows_start_with_the_opening_balance(screen):
 
 def test_the_cards(screen):
     values = {key: label.text() for key, label in screen.card_values.items()}
-    assert values == {"opening": "85,000.00", "net": "574,400.00", "paid": "180,000.00", "balance": "479,400.00",
-                      "contract_value": "2,000,000.00", "advance_agreed": "200,000.00",
-                      "advance_deducted": "68,400.00", "remaining_advance": "131,600.00"}
-    assert "10%" in screen.card_hints["advance_agreed"].text()
+    assert values == {
+        ("رصيد جاري", "opening"): "85,000.00", ("رصيد جاري", "held"): "574,400.00",
+        ("رصيد جاري", "paid"): "180,000.00", ("رصيد جاري", "balance"): "479,400.00",
+        # تأمين الأعمال: 2,000 on the card + 5% of 456,000 and 228,000 − the 5,000 payment.
+        ("تأمين أعمال", "opening"): "2,000.00", ("تأمين أعمال", "held"): "34,200.00",
+        ("تأمين أعمال", "paid"): "5,000.00", ("تأمين أعمال", "balance"): "31,200.00",
+        ("تأمينات اجتماعية", "opening"): "750.00", ("تأمينات اجتماعية", "held"): "0.00",
+        ("تأمينات اجتماعية", "paid"): "0.00", ("تأمينات اجتماعية", "balance"): "750.00",
+        ("contracts", "contract_value"): "2,000,000.00", ("contracts", "advance_agreed"): "200,000.00",
+        ("contracts", "advance_deducted"): "68,400.00", ("contracts", "remaining_advance"): "131,600.00"}
+    assert "10%" in screen.card_hints["contracts"].text()
+    assert "1 دفعات" in screen.card_hints["تأمين أعمال"].text()
 
 
 def test_period_moves_older_lines_into_the_opening_balance(screen):
@@ -224,7 +238,7 @@ def test_period_moves_older_lines_into_the_opening_balance(screen):
     screen.date_from.setDate(FROM)
     screen.date_to.setDate(TO)
     screen.run_report()
-    assert screen.card_values["opening"].text() == "55,000.00"
+    assert screen.card_values[("رصيد جاري", "opening")].text() == "55,000.00"
     assert "قبل 2026-02-01" in _cell(screen, 0, "date")
     assert screen.row_kinds.count(ROW_PAYMENT) == 2
 
@@ -263,3 +277,68 @@ def test_a_few_columns_share_the_width(screen):
     assert max(widths) - min(widths) <= 1                                 # the name no longer takes it all
     shown = sum(header.sectionSize(i) for i in range(len(COLUMN_KEYS)) if not screen.table.isColumnHidden(i))
     assert shown == screen.table.viewport().width()
+
+
+
+# -- one statement per نوع الحساب (user, 2026-10-07) -----------------------------------------------
+
+
+def test_each_account_type_opens_on_its_card_field_and_counts_its_own_payments():
+    accounts = build_accounts(CARD, EXTRACTS, PAYMENTS + [WORKS_PAYMENT])
+    current, works, social = accounts["رصيد جاري"], accounts["تأمين أعمال"], accounts["تأمينات اجتماعية"]
+    assert current["totals"]["balance"] == Decimal("479400.00")  # the تأمين payment does not touch it
+    assert [line["kind"] for line in works["lines"]] == [KIND_EXTRACT, KIND_EXTRACT, KIND_PAYMENT]
+    assert [line["balance"] for line in works["lines"]] == [Decimal("24800.00"), Decimal("36200.00"),
+                                                            Decimal("31200.00")]
+    assert works["totals"]["held"] == Decimal("34200.00") and works["totals"]["paid"] == Decimal("5000.00")
+    assert social["opening"] == Decimal("750.00") and social["totals"]["balance"] == Decimal("750.00")
+    assert works["lines"][0]["account_type"] == ALL_ACCOUNTS and works["lines"][2]["account_type"] == "تأمين أعمال"
+
+
+def test_a_payment_without_a_type_is_current_balance():
+    untyped = {k: v for k, v in WORKS_PAYMENT.items() if k != "account_type"}
+    accounts = build_accounts(CARD, [], [untyped])
+    assert accounts["رصيد جاري"]["totals"]["paid"] == Decimal("5000.00")
+    assert accounts["تأمين أعمال"]["totals"]["paid"] == 0
+
+
+def test_the_timeline_moves_three_balances():
+    points = account_timeline(build_accounts(CARD, EXTRACTS, PAYMENTS + [WORKS_PAYMENT]))
+    assert points[0]["balances"] == {"رصيد جاري": Decimal("85000.00"), "تأمين أعمال": Decimal("2000.00"),
+                                     "تأمينات اجتماعية": Decimal("750.00")}
+    assert len(points) == 1 + 2 + 4  # the openings, 2 extracts, 3 رصيد جاري + 1 تأمين payment
+    assert points[-1]["balances"]["رصيد جاري"] == Decimal("479400.00")
+    assert points[-1]["balances"]["تأمين أعمال"] == Decimal("31200.00")
+
+
+def test_one_tab_per_account_type(screen):
+    tabs = screen.account_tabs
+    assert [tabs.tabText(i) for i in range(tabs.count())] == ["الرصيد الجاري", "تأمين الأعمال", "التأمينات الاجتماعية"]
+    assert _cell(screen, 2, "account_type") == ALL_ACCOUNTS and _cell(screen, 1, "account_type") == "رصيد جاري"
+    tabs.setCurrentIndex(1)
+    assert screen.row_kinds == [ROW_OPENING, ROW_EXTRACT, ROW_EXTRACT, ROW_PAYMENT, ROW_TOTAL]
+    assert "تأمين الأعمال في بطاقة المقاول" in _cell(screen, 0, "date")
+    assert _cell(screen, 0, "balance") == "2,000.00"
+    assert _cell(screen, 3, "account_type") == "تأمين أعمال" and _cell(screen, 3, "paid") == "5,000.00"
+    assert _cell(screen, 4, "balance") == "31,200.00"
+    assert "تأمين الأعمال" in screen.count_label.text()
+    tabs.setCurrentIndex(0)
+    assert screen.row_kinds.count(ROW_PAYMENT) == 3
+
+
+def test_the_chart_draws_three_lines(screen):
+    assert set(screen.chart.series) == {"رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية"}
+    assert screen.chart.series["تأمين أعمال"][-1] == 31200.0
+
+
+def test_account_type_column_joins_an_older_saved_choice(qt_app, settings):
+    from app.ui.screens.contracting_report_base import save_columns
+
+    save_columns(settings, "contractor_statement_report/columns", ["date", "net", "balance"])  # before 2026-10-07
+    widget = ContractorStatementReportScreen(FakeService(), settings=settings)
+    assert widget.visible_columns == ("date", "account_type", "net", "balance")
+    widget.set_visible_columns(["date", "net", "balance"])  # hidden on purpose: stays hidden
+    again = ContractorStatementReportScreen(FakeService(), settings=settings)
+    assert again.visible_columns == ("date", "net", "balance")
+    widget.close()
+    again.close()
