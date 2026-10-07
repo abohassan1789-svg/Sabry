@@ -162,6 +162,17 @@ def save_columns(settings: QSettings, prefix: str, keys: Iterable[str]) -> None:
     settings.sync()
 
 
+def load_flag(settings: QSettings, prefix: str, default: bool = False) -> bool:
+    """The current user's saved on/off choice (e.g. «التفاف النص»); *default* if never saved."""
+    saved = settings.value(_columns_key(prefix))
+    return default if saved is None else str(saved).lower() in ("1", "true")
+
+
+def save_flag(settings: QSettings, prefix: str, value: bool) -> None:
+    settings.setValue(_columns_key(prefix), "1" if value else "0")
+    settings.sync()
+
+
 class ColumnChooser(QWidget):
     """The checkbox list behind «تحديد أعمدة الجدول»: one column of boxes per group.
 

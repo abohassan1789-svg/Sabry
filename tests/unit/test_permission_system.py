@@ -18,7 +18,7 @@ CONTRACTING_SCREENS = {"contractors", "company_projects", "contractor_contracts"
                        "contractor_extracts", "contractor_payments"}
 CONTRACTING_REPORTS = {"contractors_dashboard", "contractor_contracts_report",
                        "contractor_extracts_report", "contractor_advance_report",
-                       "contractor_statement_report"}
+                       "contractor_statement_report", "contractor_withholding_report"}
 SECURITY_SCREENS = {"users", "roles", "user_permissions"}
 COMPANY_INFO_SCREENS = {"company_info"}
 

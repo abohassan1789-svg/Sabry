@@ -187,7 +187,7 @@ def test_every_screen_shown_in_the_sidebar_is_covered():
     reports = _visible_sidebar_keys("reports")
     assert reports == {
         "contractor_contracts_report", "contractor_extracts_report",
-        "contractor_advance_report", "contractor_statement_report",
+        "contractor_advance_report", "contractor_statement_report", "contractor_withholding_report",
     }
     visible_sections = {
         section for section, _t, _i, _items in main_window.NAV_SECTIONS

@@ -88,6 +88,7 @@ from app.ui.screens.contractor_contracts_report_screen import ContractorContract
 from app.ui.screens.contractor_extracts_report_screen import ContractorExtractsReportScreen
 from app.ui.screens.contractor_advance_report_screen import ContractorAdvanceReportScreen
 from app.ui.screens.contractor_statement_report_screen import ContractorStatementReportScreen
+from app.ui.screens.contractor_withholding_report_screen import ContractorWithholdingReportScreen
 from app.ui.screens.contractors_dashboard_screen import ContractorsDashboardScreen
 from app.ui.screens.worker_daily_screen import WorkerDailyScreen
 from app.ui.screens.expenses_screen import ExpensesScreen
@@ -179,7 +180,7 @@ SEARCHABLE_COMBO_SCREENS: frozenset[str] = frozenset(
         "contractors_dashboard", "company_info", "contractors", "company_projects",
         "contractor_contracts", "contractor_extracts", "contractor_payments",
         "contractor_contracts_report", "contractor_extracts_report",
-        "contractor_advance_report", "contractor_statement_report",
+        "contractor_advance_report", "contractor_statement_report", "contractor_withholding_report",
         "crm_dashboard", "executive_dashboard",
         "backup", "connection_settings", "users", "roles", "user_permissions",
     }
@@ -271,6 +272,7 @@ NAV_SECTIONS: tuple[tuple[str, str, str, tuple[tuple[str, str, str], ...]], ...]
         ("contractor_extracts_report", "تقرير مستخلصات المقاولين", "🧾"),
         ("contractor_advance_report", "تقرير كشف حساب الدفعة المقدمة", "💳"),
         ("contractor_statement_report", "تقرير كشف حساب مقاول", "📒"),
+        ("contractor_withholding_report", "تقرير ضرائب الخصم", "🧾"),
         # كشوف حسابات التوريدات والتقرير الشامل — نُقلت هنا من قسم التوريدات.
         ("tawrid_customer_statement", "كشف حساب عميل", "📄"),
         ("tawrid_supplier_statement", "كشف حساب الكسارات", "📄"),
@@ -446,6 +448,11 @@ class ReviewMainWindow(QMainWindow):
             "title": "تقرير كشف حساب مقاول",
             "view": "contracting.contractor_statement_report.view",
             "make": lambda: ContractorStatementReportScreen(),
+        }
+        factories["contractor_withholding_report"] = {
+            "title": "تقرير ضرائب الخصم",
+            "view": "contracting.contractor_withholding_report.view",
+            "make": lambda: ContractorWithholdingReportScreen(),
         }
         factories["boms"] = {
             "title": "قائمة المواد",

@@ -215,6 +215,10 @@ STATIC_REPORT_TARGETS: list[dict[str, str]] = [
     {"module_code": "contracting", "module_name_ar": "المقاولات", "module_name_en": "Contracting",
      "target_code": "contractor_statement_report", "target_name_ar": "تقرير كشف حساب مقاول",
      "target_name_en": "Contractor Statement Report"},
+    # تقرير ضرائب الخصم — checked as ``contracting.contractor_withholding_report.<action>``.
+    {"module_code": "contracting", "module_name_ar": "المقاولات", "module_name_en": "Contracting",
+     "target_code": "contractor_withholding_report", "target_name_ar": "تقرير ضرائب الخصم",
+     "target_name_en": "Withholding Tax Report"},
     {"module_code": "reports", "module_name_ar": "التقارير", "module_name_en": "Reports",
      "target_code": "daily_followup_report", "target_name_ar": "تقرير المتابعة اليومية",
      "target_name_en": "Daily Follow-up Report"},
@@ -335,6 +339,7 @@ TARGET_ACTIONS: dict[str, tuple[str, ...]] = {
     "contractor_extracts_report": CONTRACTING_REPORT_ACTIONS,
     "contractor_advance_report": CONTRACTING_REPORT_ACTIONS,
     "contractor_statement_report": CONTRACTING_REPORT_ACTIONS,
+    "contractor_withholding_report": CONTRACTING_REPORT_ACTIONS,
     # النظام والصلاحيات.
     "users": SECURITY_SCREEN_ACTIONS,
     "roles": SECURITY_SCREEN_ACTIONS,
