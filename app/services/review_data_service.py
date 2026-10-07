@@ -18,8 +18,9 @@ from app.config.settings import get_settings
 _TRUE_TEXTS = frozenset({"نشط", "true", "True", "1", "yes", "Yes", "نعم"})
 _FALSE_TEXTS = frozenset({"موقوف", "false", "False", "0", "no", "No", "لا"})
 
-# نوع المقاول — the four values the ``ck_contractors_type`` CHECK accepts.
-CONTRACTOR_TYPES = ("مقاول", "مورد", "استشاري", "دعاية وإعلان")
+# نوع المقاول — the values the ``ck_contractors_type`` CHECK accepts.
+# «سمسار» added 2026-10-07 (user request).
+CONTRACTOR_TYPES = ("مقاول", "مورد", "استشاري", "دعاية وإعلان", "سمسار")
 
 
 @dataclass(frozen=True)

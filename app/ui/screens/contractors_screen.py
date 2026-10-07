@@ -11,11 +11,12 @@ What the user asked for, and where it lives:
 * **كود المقاول** is «A-H/CD-1001», «A-H/CD-1002», ... «جديد» fills in the next
   one, and it stays an ordinary editable box — the user may change it. Only
   uniqueness is enforced (a clear message here, the UNIQUE index underneath).
-* **نوع المقاول** is one of مقاول / مورد / استشاري / دعاية وإعلان.
+* **نوع المقاول** is one of مقاول / مورد / استشاري / دعاية وإعلان / سمسار
+  (سمسار added 2026-10-07).
 * **الضرائب والتأمينات والخصومات** are amounts, not percentages, plus the new
   **الخصومات الأخرى**.
 * **Count cards** under the form: إجمالي السجلات، الموردين، المقاولين،
-  الاستشاريين، الدعاية والإعلان. Clicking one lists who is behind the number;
+  الاستشاريين، الدعاية والإعلان، السماسرة. Clicking one lists who is behind the number;
   picking a row opens that contractor here.
 
 * **مسودة / معتمد** (2026-10-02): «حفظ» keeps a new contractor as a draft;
@@ -74,6 +75,7 @@ STAT_CARDS = (
     ("مقاول", "المقاولين", "المقاولين", GREEN),
     ("استشاري", "الاستشاريين", "الاستشاريين", "#7C3AED"),
     ("دعاية وإعلان", "الدعاية والإعلان", "الدعاية والإعلان", "#C2410C"),
+    ("سمسار", "السماسرة", "السماسرة", "#0F766E"),
 )
 
 # Money boxes that are NOT NULL DEFAULT 0, so a blank one means zero.

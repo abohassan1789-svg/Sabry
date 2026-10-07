@@ -160,10 +160,10 @@ def test_a_duplicate_code_is_refused_before_saving(screen):
 
 # --- type and amounts -----------------------------------------------------------
 
-def test_the_type_offers_exactly_four_choices(screen):
+def test_the_type_offers_exactly_five_choices(screen):
     combo = screen.inputs["contractor_type"]
     assert [combo.itemText(i) for i in range(combo.count())] == [
-        "مقاول", "مورد", "استشاري", "دعاية وإعلان"]
+        "مقاول", "مورد", "استشاري", "دعاية وإعلان", "سمسار"]
 
 
 def test_new_record_defaults_the_type(screen):
@@ -233,9 +233,10 @@ def test_money(value, expected):
 
 # --- count cards -------------------------------------------------------------------
 
-def test_the_five_count_cards(screen):
+def test_the_six_count_cards(screen):
     shown = {key: label.text() for key, label in screen._stat_values.items()}
-    assert shown == {"": "2", "مورد": "0", "مقاول": "1", "استشاري": "0", "دعاية وإعلان": "1"}
+    assert shown == {"": "2", "مورد": "0", "مقاول": "1", "استشاري": "0", "دعاية وإعلان": "1",
+                     "سمسار": "0"}
 
 
 class _PickSecond:

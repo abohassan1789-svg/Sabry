@@ -1,7 +1,7 @@
 """نافذة قائمة المقاولين — opened from a count card on شاشة المقاولين.
 
 Each card («إجمالي السجلات»، «الموردين»، «المقاولين»، «الاستشاريين»،
-«الدعاية والإعلان») opens this list of the contractors behind its number. Picking
+«الدعاية والإعلان»، «السماسرة») opens this list of the contractors behind its number. Picking
 a row (double-click, «فتح», or Enter when one row is left) hands it back so the
 screen can load that card.
 

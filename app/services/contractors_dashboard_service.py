@@ -31,7 +31,7 @@ from app.services.contractor_contract_service import contract_amounts, to_decima
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
 from app.services.contractor_extract_service import extract_amounts
 
-CONTRACTOR_TYPES = ("مقاول", "مورد", "استشاري", "دعاية وإعلان")
+CONTRACTOR_TYPES = ("مقاول", "مورد", "استشاري", "دعاية وإعلان", "سمسار")
 PAYMENT_METHODS = ("نقدي", "شيك", "تحويل")
 
 # contractors column → dashboard key
