@@ -258,6 +258,13 @@ def test_new_extract_takes_the_defaults(screen):
     assert screen.mode == "new"
     assert form.extract_no.text() == "A-H/CT-1001/EX-03"
     assert form.vat_pct.value() == 14
+    # نسبة الضريبة is a list (user, 2026-10-07): 14 / 5 / 5.04 / 10.
+    assert [form.vat_pct.itemText(i) for i in range(form.vat_pct.count())] == ["14%", "5%", "5.04%", "10%"]
+    form.vat_pct.setCurrentIndex(2)
+    assert form.values()["vat_pct"] == Decimal("5.04")
+    form.works_value.setText("105,040.00")
+    assert form.before_tax.text() == "100,000.00"  # 105,040 ÷ 1.0504
+    form.vat_pct.set_value(14)
     assert form.rates["works_insurance_pct"].value() == 5
     assert form.rates["advance_payment_pct"].value() == 10          # from the contract
     assert form.rates["withholding_tax_pct"].currentText() == "1%"   # the contract's rates,

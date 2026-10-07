@@ -53,6 +53,7 @@ from app.services.contractor_extract_service import (
     DEFAULT_VAT_PCT,
     DEFAULT_WORKS_INSURANCE_PCT,
     SOCIAL_OPTIONS,
+    VAT_OPTIONS,
     WITHHOLDING_OPTIONS,
     ContractorExtractService,
     ExtractError,
@@ -172,8 +173,10 @@ class ExtractForm(QWidget):
         self.works_value = self._line_edit("0.00", ltr=True)
         self.works_value.textChanged.connect(self.recalc)
         self.works_value.editingFinished.connect(lambda: self._format_money(self.works_value))
-        self.vat_pct = self._spin("#475569")
-        self.vat_pct.setValue(float(DEFAULT_VAT_PCT))
+        # A list like ضريبة الخصم (user, 2026-10-07): 14 / 5 / 5.04 / 10, another rate may be typed.
+        self.vat_pct = RateCombo(VAT_OPTIONS, "#475569")
+        self.vat_pct.set_value(DEFAULT_VAT_PCT)
+        self.vat_pct.currentTextChanged.connect(self.recalc)
         self.before_tax = self._line_edit("", ltr=True)
         self.before_tax.setReadOnly(True)
         self.before_tax.setFocusPolicy(Qt.NoFocus)
@@ -423,7 +426,7 @@ class ExtractForm(QWidget):
         if isinstance(date, (datetime.date, datetime.datetime)):
             self.extract_date.setDate(QDate(date.year, date.month, date.day))
         self.works_value.setText(_money(record.get("works_value")))
-        self.vat_pct.setValue(float(to_decimal(record.get("vat_pct"))))
+        self.vat_pct.set_value(record.get("vat_pct"))
         for _key, _label, column, *_rest in LINES:
             self._set_rate(column, record.get(column))
         self.other_deductions.setText(_money(record.get("other_deductions")))
@@ -434,7 +437,7 @@ class ExtractForm(QWidget):
         self.extract_no.clear()
         self.extract_date.setDate(QDate.currentDate())
         self.works_value.clear()
-        self.vat_pct.setValue(float(DEFAULT_VAT_PCT))
+        self.vat_pct.set_value(DEFAULT_VAT_PCT)
         for _key, _label, column, *_rest in LINES:
             self._set_rate(column, 0)
         self.rates["works_insurance_pct"].setValue(float(DEFAULT_WORKS_INSURANCE_PCT))
@@ -468,7 +471,7 @@ class ExtractForm(QWidget):
             "extract_no": self.extract_no.text(),
             "extract_date": self.extract_date.date().toString("yyyy-MM-dd"),
             "works_value": self.works_value.text(),
-            "vat_pct": Decimal(str(round(self.vat_pct.value(), 3))),
+            "vat_pct": self.vat_pct.value(),
             "other_deductions": self.other_deductions.text(),
         }
         for _key, _label, column, *_rest in LINES:

@@ -41,6 +41,8 @@ DEFAULT_WORKS_INSURANCE_PCT = Decimal("5")
 # The usual choices of the two list rates; any other rate 0–100 may be typed (2026-10-02).
 WITHHOLDING_OPTIONS: tuple[Decimal, ...] = (Decimal("0"), Decimal("1"), Decimal("3"), Decimal("5"))
 SOCIAL_OPTIONS: tuple[Decimal, ...] = (Decimal("0"), Decimal("0.365"), Decimal("2.8"), Decimal("3.6"))
+# نسبة الضريبة is a list too (user, 2026-10-07), in the user's order; 14% stays the default.
+VAT_OPTIONS: tuple[Decimal, ...] = (Decimal("14"), Decimal("5"), Decimal("5.04"), Decimal("10"))
 
 # (key, label) of the deduction lines, in screen order.
 DEDUCTION_LINES: tuple[tuple[str, str], ...] = (
