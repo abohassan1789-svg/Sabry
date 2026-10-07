@@ -7,7 +7,9 @@
 * One tab per نوع الحساب over the statement: رصيد أول المدة first, then the
   extracts and that type's payments by date, each with its الرصيد التراكمي, and a
   totals row. «تحديد أعمدة الجدول» picks the user's columns (plus «نوع الحساب»);
-  the choice is kept per user (default: all but the rates).
+  each tab keeps its own choice per user (user, 2026-10-07). A tab opens on the
+  movement's identity and its three figures: what the extracts add to that type
+  (صافي المستخلص / قيمة تأمين الأعمال / قيمة التأمينات الاجتماعية)، التحصيلات، الرصيد التراكمي.
 
 Every figure comes from ``contractor_statement_report_service``.
 """
@@ -59,12 +61,10 @@ from app.ui.screens.contracting_report_base import (
     save_columns,
     table_item,
 )
-from app.ui.screens.contracting_report_base import _columns_key  # noqa: E402  (per-user settings key)
 from app.ui.screens.contractor_contracts_screen import _money, _rate_text
 
 PERMISSION_BASE = "contracting.contractor_statement_report"
 SETTINGS_KEY = "contractor_statement_report/columns"
-KNOWN_KEY = "contractor_statement_report/known_columns"  # columns that existed when the choice was saved
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
 # The user's 19 columns in their order: (line key, header, kind).
@@ -94,6 +94,16 @@ COLUMN_KEYS = tuple(key for key, _header, _kind in COLUMNS)
 KIND = {key: kind for key, _header, kind in COLUMNS}
 HEADER = {key: header.replace("\n", " ") for key, header, _kind in COLUMNS}
 DEFAULT_COLUMNS = tuple(key for key in COLUMN_KEYS if KIND[key] != RATE_COL)
+# Each tab opens on its own three figures (user, 2026-10-07): the identity of the movement,
+# what the extracts add to that نوع الحساب, the collections and the running balance.
+IDENTITY_COLUMNS = ("date", "contractor_name", "extract_no", "account_type")
+TAB_DEFAULTS: dict[str, tuple[str, ...]] = {
+    CURRENT_BALANCE: IDENTITY_COLUMNS + ("net", "paid", "balance"),
+    WORKS_INSURANCE: IDENTITY_COLUMNS + ("works_insurance", "paid", "balance"),
+    SOCIAL_INSURANCE: IDENTITY_COLUMNS + ("social_insurance", "paid", "balance"),
+}
+TAB_SETTINGS = {CURRENT_BALANCE: "current", WORKS_INSURANCE: "works_insurance",
+                SOCIAL_INSURANCE: "social_insurance"}  # each tab's own saved choice
 
 COLUMN_GROUPS = (
     ("بيانات الحركة", ("date", "contractor_name", "extract_no", "account_type")),
@@ -253,21 +263,21 @@ class ContractorStatementReportScreen(ContractingReportBase):
         self.statement: dict[str, Any] = empty_statement()
         self.account = CURRENT_BALANCE  # the tab on show
         self.row_kinds: list[str] = []
-        self.visible_columns = self._load_columns()
+        self.tab_columns = self._load_columns()
         super().__init__(service or ContractorStatementReportService(), parent)
 
-    def _load_columns(self) -> tuple[str, ...]:
-        """The user's saved choice, plus any default column added since it was saved («نوع الحساب»)."""
-        chosen = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS)
-        known_key = _columns_key(KNOWN_KEY)
-        if self.settings.value(_columns_key(SETTINGS_KEY)) is not None:
-            known = self.settings.value(known_key)
-            # A choice saved before KNOWN_KEY existed knew every column but «نوع الحساب».
-            seen = set(str(known).split(",")) if known is not None else set(COLUMN_KEYS) - {"account_type"}
-            chosen = tuple(key for key in COLUMN_KEYS if key in chosen or (key in DEFAULT_COLUMNS and key not in seen))
-            save_columns(self.settings, SETTINGS_KEY, chosen)
-        self.settings.setValue(known_key, ",".join(COLUMN_KEYS))
-        return chosen
+    @staticmethod
+    def _settings_key(account: str) -> str:
+        return f"{SETTINGS_KEY}/{TAB_SETTINGS[account]}"
+
+    def _load_columns(self) -> dict[str, tuple[str, ...]]:
+        """Every tab's saved choice, or that tab's own three figures if never saved."""
+        return {account: load_columns(self.settings, self._settings_key(account), COLUMN_KEYS, TAB_DEFAULTS[account])
+                for account in ACCOUNT_TYPES}
+
+    @property
+    def visible_columns(self) -> tuple[str, ...]:
+        return self.tab_columns[self.account]
 
     # -- layout ------------------------------------------------------------------------
 
@@ -343,6 +353,10 @@ class ContractorStatementReportScreen(ContractingReportBase):
         layout = QHBoxLayout()
         layout.setSpacing(8)
         self.chooser = ColumnChooser(COLUMN_GROUPS, HEADER, DEFAULT_COLUMNS, self.set_visible_columns)
+        # «استعادة الافتراضي» brings back the open tab's own three figures.
+        self.chooser.default_button.clicked.disconnect()
+        self.chooser.default_button.clicked.connect(
+            lambda _=False: self.set_visible_columns(TAB_DEFAULTS[self.account]))
         self.columns_button, self.columns_menu = column_button(self.chooser)
         self.columns_count = self._caption("")
         # One statement per نوع الحساب (user, 2026-10-07).
@@ -369,6 +383,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
     def _on_account_tab(self, index: int) -> None:
         self.account = ACCOUNT_TYPES[index] if 0 <= index < len(ACCOUNT_TYPES) else CURRENT_BALANCE
         self._update_count()
+        self._apply_columns()  # each tab shows its own columns
         self._fill_table()
 
     def _account_statement(self) -> dict[str, Any]:
@@ -394,8 +409,8 @@ class ContractorStatementReportScreen(ContractingReportBase):
 
     def set_visible_columns(self, keys: tuple[str, ...] | list[str]) -> None:
         chosen = set(keys)
-        self.visible_columns = tuple(key for key in COLUMN_KEYS if key in chosen)
-        save_columns(self.settings, SETTINGS_KEY, self.visible_columns)
+        self.tab_columns[self.account] = tuple(key for key in COLUMN_KEYS if key in chosen)
+        save_columns(self.settings, self._settings_key(self.account), self.visible_columns)
         self._apply_columns()
         self._fill_table()  # the opening and totals labels sit on the visible columns
 

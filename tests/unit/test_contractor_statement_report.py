@@ -198,7 +198,8 @@ def test_the_users_columns_in_order(screen):
         "التاريخ", "اسم المقاول", "رقم المستخلص", "نوع الحساب", "إجمالي المستخلص"]
     assert COLUMN_KEYS[-3:] == ("net", "paid", "balance")
     assert len(DEFAULT_COLUMNS) == 15  # every column but the five rates
-    assert _visible(screen.table) == list(DEFAULT_COLUMNS)
+    # The رصيد جاري tab opens on its three figures (user, 2026-10-07).
+    assert _visible(screen.table) == ["date", "contractor_name", "extract_no", "account_type", "net", "paid", "balance"]
 
 
 def test_rows_start_with_the_opening_balance(screen):
@@ -331,14 +332,25 @@ def test_the_chart_draws_three_lines(screen):
     assert screen.chart.series["تأمين أعمال"][-1] == 31200.0
 
 
-def test_account_type_column_joins_an_older_saved_choice(qt_app, settings):
-    from app.ui.screens.contracting_report_base import save_columns
+def test_each_tab_opens_on_its_own_three_figures(screen):
+    """«لما أضغط على تبويبة ... تظهر لي أهم ثلاث أعمدة تلقائيًا» (user, 2026-10-07)."""
+    identity = ["date", "contractor_name", "extract_no", "account_type"]
+    for index, figures in enumerate((["net", "paid", "balance"], ["works_insurance", "paid", "balance"],
+                                     ["social_insurance", "paid", "balance"])):
+        screen.account_tabs.setCurrentIndex(index)
+        shown = _visible(screen.table)
+        assert shown == [key for key in COLUMN_KEYS if key in identity + figures]
 
-    save_columns(settings, "contractor_statement_report/columns", ["date", "net", "balance"])  # before 2026-10-07
-    widget = ContractorStatementReportScreen(FakeService(), settings=settings)
-    assert widget.visible_columns == ("date", "account_type", "net", "balance")
-    widget.set_visible_columns(["date", "net", "balance"])  # hidden on purpose: stays hidden
+
+def test_each_tab_remembers_its_own_choice(screen, settings):
+    screen.account_tabs.setCurrentIndex(1)
+    screen.set_visible_columns(["date", "works_value", "works_insurance", "paid", "balance"])
+    screen.account_tabs.setCurrentIndex(0)
+    assert "works_value" not in _visible(screen.table) and "net" in _visible(screen.table)
     again = ContractorStatementReportScreen(FakeService(), settings=settings)
-    assert again.visible_columns == ("date", "net", "balance")
-    widget.close()
+    again.account_tabs.setCurrentIndex(1)
+    assert _visible(again.table) == ["date", "works_value", "works_insurance", "paid", "balance"]
+    again.chooser.default_button.click()  # «استعادة الافتراضي»: that tab's three figures
+    assert _visible(again.table) == ["date", "contractor_name", "extract_no", "account_type", "works_insurance",
+                                     "paid", "balance"]
     again.close()
