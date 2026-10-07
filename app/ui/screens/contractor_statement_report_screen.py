@@ -3,6 +3,8 @@
 * Four cards of four figures (user, 2026-10-07): one per نوع الحساب — الرصيد الجاري،
   تأمين الأعمال، التأمينات الاجتماعية: رصيد أول المدة، مستخلصات، دفعات، متبقي — and
   the contracts' advance (قيمة العقد، الدفعة المقدمة، المخصوم، المتبقي).
+* إجمالي ضرائب الخصم (user, 2026-10-07): a fifth card, shown only — the card's
+  ضرائب الخصم + the extracts' ضريبة الخصم; no balance uses it.
 * A line chart of the three running balances, one line per نوع الحساب.
 * One tab per نوع الحساب over the statement: رصيد أول المدة first, then the
   extracts and that type's payments by date, each with its الرصيد التراكمي, and a
@@ -124,7 +126,10 @@ ACCOUNT_CARDS = (
 CONTRACTS_CARD = ("contracts", "الدفعة المقدمة من العقود", "#B45309", "",
                   (("contract_value", "قيمة العقد"), ("advance_agreed", "الدفعة المقدمة"),
                    ("advance_deducted", "المخصوم"), ("remaining_advance", "المتبقي")))
-CARDS = ACCOUNT_CARDS + (CONTRACTS_CARD,)
+# Shown only: the card's ضرائب الخصم + the extracts' (user, 2026-10-07); no balance uses it.
+WITHHOLDING_CARD = ("withholding", "إجمالي ضرائب الخصم", "#BE123C", "",
+                    (("opening", "رصيد أول المدة"), ("held", "مستخلصات"), ("total", "الإجمالي")))
+CARDS = ACCOUNT_CARDS + (CONTRACTS_CARD, WITHHOLDING_CARD)
 ACCENT = {key: accent for key, _title, accent, _field, _figures in CARDS}
 CARD_FIELD = {key: field for key, _title, _accent, field, _figures in ACCOUNT_CARDS}  # the contractor card's field
 TAB_TITLES = {key: title for key, title, _accent, _field, _figures in ACCOUNT_CARDS}
@@ -427,6 +432,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         accounts, contracts = self.statement["accounts"], self.statement["contracts"]
         sources = {account: accounts[account]["totals"] for account in ACCOUNT_TYPES}
         sources["contracts"] = contracts
+        sources["withholding"] = withholding = self.statement["withholding"]
         for key, _title, _accent, _field, figures in CARDS:
             for figure, _caption in figures:
                 value = sources[key][figure]
@@ -441,6 +447,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         self.card_hints["contracts"].setText(
             f"{contracts['count']} عقود · نسبة {_rate_text(round(contracts['advance_pct'], 3))}%"
             + (f" · حتى {date_text(filters['date_to'])}" if filters["date_to"] else ""))
+        self.card_hints["withholding"].setText(f"{withholding['extracts_count']} مستخلصات · للعرض فقط")
         self._update_count()
         self.chart.set_statement(self.statement)
         self._fill_table()

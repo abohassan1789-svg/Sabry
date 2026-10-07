@@ -34,6 +34,11 @@ One statement per نوع الحساب (user, 2026-10-07), each with its own رص
 «الكل» in اسم المقاول (user, 2026-10-07): every approved contractor in one statement —
 the openings are their cards added up (with a company / project chosen, the cards of
 the contractors with a contract there), then all their movements by date.
+
+إجمالي ضرائب الخصم (user, 2026-10-07): a card of its own, shown only — it is not in
+any balance. It starts on the card's «ضرائب الخصم والإضافة» and adds the extracts'
+ضريبة الخصم (card 36,000 + extracts 4,000 = 40,000). Extracts before «من» go into
+its رصيد أول المدة, those after «إلى» are left out.
 """
 
 from __future__ import annotations
@@ -157,6 +162,23 @@ def account_timeline(accounts: dict[str, dict[str, Any]]) -> list[dict[str, Any]
     return points
 
 
+def withholding_total(card_amount: Any, extracts: list[dict[str, Any]],
+                      date_from: Any = None, date_to: Any = None) -> dict[str, Any]:
+    """إجمالي ضرائب الخصم: ``{opening, held, total, extracts_count}`` — shown, never deducted."""
+    opening, held, count = _money(to_decimal(card_amount)), ZERO, 0
+    for extract in extracts:
+        day = _day(extract.get("extract_date"))
+        if date_to is not None and day is not None and day > date_to:
+            continue
+        amount = extract_amounts(extract)["withholding_tax"]
+        if date_from is not None and day is not None and day < date_from:
+            opening += amount
+            continue
+        held += amount
+        count += 1
+    return {"opening": opening, "held": held, "total": opening + held, "extracts_count": count}
+
+
 def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, Any]],
                      date_to: Any = None) -> dict[str, Any]:
     """The contracts' value and advance, and how much of it the extracts up to *date_to* took back."""
@@ -176,15 +198,17 @@ def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, A
     }
 
 
-def _with_accounts(accounts: dict[str, dict[str, Any]], contracts: dict[str, Any]) -> dict[str, Any]:
+def _with_accounts(accounts: dict[str, dict[str, Any]], contracts: dict[str, Any],
+                   withholding: dict[str, Any]) -> dict[str, Any]:
     """The رصيد جاري statement at the top (``opening``/``lines``/``totals``), plus every type's."""
     statement = dict(accounts[CURRENT_BALANCE])
-    statement.update(accounts=accounts, timeline=account_timeline(accounts), contracts=contracts)
+    statement.update(accounts=accounts, timeline=account_timeline(accounts), contracts=contracts,
+                     withholding=withholding)
     return statement
 
 
 def empty_statement() -> dict[str, Any]:
-    return _with_accounts(build_accounts({}, [], []), contract_advance([], []))
+    return _with_accounts(build_accounts({}, [], []), contract_advance([], []), withholding_total(0, []))
 
 
 class ContractorStatementReportService(ContractorContractsReportService):
@@ -206,7 +230,8 @@ class ContractorStatementReportService(ContractorContractsReportService):
             row = self._db.fetch_one(
                 "SELECT COALESCE(sum(d.current_balance), 0) AS current_balance, "
                 "COALESCE(sum(d.works_insurance_amount), 0) AS works_insurance_amount, "
-                "COALESCE(sum(d.social_insurance_amount), 0) AS social_insurance_amount "
+                "COALESCE(sum(d.social_insurance_amount), 0) AS social_insurance_amount, "
+                "COALESCE(sum(d.withholding_tax_amount), 0) AS withholding_tax_amount "
                 "FROM contractors d WHERE d.status = 'approved'"
                 + (" AND d.contractor_id IN (SELECT k.contractor_id FROM contractor_contracts k "
                    "JOIN company_projects p ON p.project_id = k.project_id "
@@ -215,7 +240,8 @@ class ContractorStatementReportService(ContractorContractsReportService):
             )
         else:
             row = self._db.fetch_one(
-                "SELECT current_balance, works_insurance_amount, social_insurance_amount FROM contractors "
+                "SELECT current_balance, works_insurance_amount, social_insurance_amount, withholding_tax_amount "
+                "FROM contractors "
                 "WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
             )
             if row is None:
@@ -252,4 +278,5 @@ class ContractorStatementReportService(ContractorContractsReportService):
             params,
         )
         accounts = build_accounts(row, extracts, payments, date_from, date_to)
-        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to))
+        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to),
+                              withholding_total(row.get("withholding_tax_amount"), extracts, date_from, date_to))

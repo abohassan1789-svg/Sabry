@@ -31,6 +31,7 @@ from app.services.contractor_statement_report_service import (
     build_statement,
     contract_advance,
     empty_statement,
+    withholding_total,
 )
 from app.ui.screens.contractor_statement_report_screen import (
     COLUMN_KEYS,
@@ -70,7 +71,8 @@ PAYMENTS = [
 CONTRACTS = [{"contract_id": 100, "contract_value": Decimal("2000000"), "advance_payment_pct": Decimal("10")}]
 OPENING = Decimal("85000")
 # نوع الحساب (2026-10-07): the card's opening per type, and a تأمين أعمال payment.
-CARD = {"current_balance": OPENING, "works_insurance_amount": Decimal("2000"), "social_insurance_amount": Decimal("750")}
+CARD = {"current_balance": OPENING, "works_insurance_amount": Decimal("2000"), "social_insurance_amount": Decimal("750"),
+        "withholding_tax_amount": Decimal("36000")}
 WORKS_PAYMENT = dict(_payment(12, (2026, 4, 1), "5000"), account_type="تأمين أعمال")
 FROM, TO = datetime.date(2026, 2, 1), datetime.date(2026, 12, 31)
 
@@ -130,6 +132,23 @@ def test_contract_advance():
     assert contract_advance(CONTRACTS, EXTRACTS, datetime.date(2026, 3, 10))["advance_deducted"] == Decimal("45600.00")
 
 
+def test_withholding_total_is_the_card_plus_the_extracts():
+    """إجمالي ضرائب الخصم (user, 2026-10-07): card 36,000 + extracts 4,000 = 40,000."""
+    figures = withholding_total(Decimal("36000"), EXTRACTS[:1])
+    assert (figures["opening"], figures["held"], figures["total"]) == (
+        Decimal("36000.00"), Decimal("4000.00"), Decimal("40000.00"))
+    # From 2026-03-01: EX-01 moves into the opening; up to 2026-03-10 EX-02 is left out.
+    figures = withholding_total(Decimal("36000"), EXTRACTS, datetime.date(2026, 3, 1), datetime.date(2026, 3, 10))
+    assert (figures["opening"], figures["held"], figures["extracts_count"]) == (Decimal("40000.00"), 0, 0)
+    assert withholding_total(None, [])["total"] == 0
+
+
+def test_withholding_stays_out_of_every_balance():
+    accounts = build_accounts(CARD, EXTRACTS, PAYMENTS)
+    without = build_accounts({k: v for k, v in CARD.items() if k != "withholding_tax_amount"}, EXTRACTS, PAYMENTS)
+    assert all(accounts[a]["totals"]["balance"] == without[a]["totals"]["balance"] for a in accounts)
+
+
 def test_payment_text():
     assert payment_text(PAYMENTS[1] | {"kind": KIND_PAYMENT}) == "دفعة تحويل 784512 — A-H/CT-1001/EX-01"
     assert payment_text(PAYMENTS[2] | {"kind": KIND_PAYMENT}) == "دفعة نقدي — عامة"
@@ -157,7 +176,9 @@ class FakeService:
         if filters["contractor_id"] not in (None, 1):  # None = «الكل»: here, the one contractor with movements
             return empty_statement()
         accounts = build_accounts(CARD, EXTRACTS, PAYMENTS + [WORKS_PAYMENT], filters["date_from"], filters["date_to"])
-        return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"]))
+        return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"]),
+                              withholding_total(CARD["withholding_tax_amount"], EXTRACTS,
+                                                filters["date_from"], filters["date_to"]))
 
 
 @pytest.fixture(scope="module")
@@ -229,7 +250,11 @@ def test_the_cards(screen):
         ("تأمينات اجتماعية", "opening"): "750.00", ("تأمينات اجتماعية", "held"): "0.00",
         ("تأمينات اجتماعية", "paid"): "0.00", ("تأمينات اجتماعية", "balance"): "750.00",
         ("contracts", "contract_value"): "2,000,000.00", ("contracts", "advance_agreed"): "200,000.00",
-        ("contracts", "advance_deducted"): "68,400.00", ("contracts", "remaining_advance"): "131,600.00"}
+        ("contracts", "advance_deducted"): "68,400.00", ("contracts", "remaining_advance"): "131,600.00",
+        # ضرائب الخصم: 36,000 on the card + 1% of the two extracts' 400,000 and 200,000.
+        ("withholding", "opening"): "36,000.00", ("withholding", "held"): "6,000.00",
+        ("withholding", "total"): "42,000.00"}
+    assert "للعرض فقط" in screen.card_hints["withholding"].text()
     assert "10%" in screen.card_hints["contracts"].text()
     assert "1 دفعات" in screen.card_hints["تأمين أعمال"].text()
 
@@ -272,7 +297,7 @@ class _Db:
     def fetch_one(self, sql, params=None):
         self.queries.append((sql, params))
         return {"current_balance": Decimal("100"), "works_insurance_amount": Decimal("20"),
-                "social_insurance_amount": Decimal("3")}
+                "social_insurance_amount": Decimal("3"), "withholding_tax_amount": Decimal("7")}
 
     def fetch_all(self, sql, params=None):
         self.queries.append((sql, params))
@@ -288,6 +313,7 @@ def test_service_all_contractors_adds_up_the_cards():
     assert "sum(d.current_balance)" in card_sql and "IN (SELECT" not in card_sql and card_params == []
     assert all("contractor_id = %s" not in sql for sql, _p in db.queries)
     assert statement["accounts"]["تأمين أعمال"]["opening"] == Decimal("20.00")
+    assert "sum(d.withholding_tax_amount)" in card_sql and statement["withholding"]["total"] == Decimal("7.00")
     db = _Db()
     ContractorStatementReportService(db).statement(company_id=10)  # «الكل» in one company
     card_sql, card_params = db.queries[0]
