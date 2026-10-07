@@ -43,6 +43,7 @@ from typing import Any
 
 from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_payment_service import (
+    ACCOUNT_OPENING,
     ACCOUNT_TYPES,
     CURRENT_BALANCE,
     SOCIAL_INSURANCE,
@@ -61,8 +62,6 @@ AMOUNT_KEYS = EXTRACT_AMOUNT_KEYS + ("paid",)
 ALL_ACCOUNTS = "كل الحسابات"  # «نوع الحساب» on an extract line: it feeds the three
 # What an extract adds to each نوع الحساب (an ``extract_amounts`` key), and the card's opening field.
 ACCOUNT_HELD = {CURRENT_BALANCE: "net", WORKS_INSURANCE: "works_insurance", SOCIAL_INSURANCE: "social_insurance"}
-ACCOUNT_OPENING = {CURRENT_BALANCE: "current_balance", WORKS_INSURANCE: "works_insurance_amount",
-                   SOCIAL_INSURANCE: "social_insurance_amount"}
 
 
 def _day(value: Any) -> datetime.date | None:

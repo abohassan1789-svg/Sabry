@@ -52,6 +52,9 @@ ACCOUNT_FIELDS: dict[str, tuple[str, str]] = {
     WORKS_INSURANCE: ("works_insurance", "paid_works_insurance"),
     SOCIAL_INSURANCE: ("social_insurance", "paid_social_insurance"),
 }
+# Each type's رصيد أول المدة: its field on the contractor's card (شاشة المقاولين).
+ACCOUNT_OPENING: dict[str, str] = {CURRENT_BALANCE: "current_balance", WORKS_INSURANCE: "works_insurance_amount",
+                                   SOCIAL_INSURANCE: "social_insurance_amount"}
 GENERAL_LABEL = "دفعة عامة"  # what «رقم المستخلص» shows for a payment without one
 
 _CATALOG_SQL = (
@@ -165,18 +168,21 @@ def extracts_of(catalog: list[dict[str, Any]], contractor_id: Any, company_id: A
 
 # -- the arithmetic ------------------------------------------------------------------------
 
-def payment_balance(net: Any, paid_total: Any, own_saved: Any, amount: Any) -> dict[str, Decimal]:
-    """Where one extract stands with the payment on screen.
+def payment_balance(net: Any, paid_total: Any, own_saved: Any, amount: Any, opening: Any = 0) -> dict[str, Decimal]:
+    """Where one extract (or project) stands with the payment on screen.
 
-    ``paid_total`` is what the extract's SAVED payments total; ``own_saved`` is
-    the saved amount of the payment being edited when it is on this extract (0
-    for a new one), so it is not counted twice. ``previous`` = the other
-    payments, ``remaining`` = net − previous − this (negative = overpaid).
+    ``paid_total`` is what the SAVED payments total; ``own_saved`` is the saved
+    amount of the payment being edited when it is counted there (0 for a new one),
+    so it is not counted twice. ``opening`` = رصيد أول المدة from the contractor's
+    card (a general payment's). ``previous`` = the other payments, ``remaining`` =
+    opening + net − previous − this (negative = overpaid).
     """
+    opening = to_decimal(opening)
     net = to_decimal(net)
     previous = to_decimal(paid_total) - to_decimal(own_saved)
     this = to_decimal(amount)
-    return {"net": net, "previous": previous, "this": this, "remaining": net - previous - this}
+    return {"opening": opening, "net": net, "previous": previous, "this": this,
+            "remaining": opening + net - previous - this}
 
 
 def general_paid(general: dict[tuple, Any], contractor_id: Any, project_id: Any = None,
@@ -226,7 +232,8 @@ class ContractorPaymentService:
 
     def contractor_choices(self) -> list[dict[str, Any]]:
         return self._db.fetch_all(
-            "SELECT contractor_id, contractor_code, contractor_name, contractor_type "
+            "SELECT contractor_id, contractor_code, contractor_name, contractor_type, "
+            "current_balance, works_insurance_amount, social_insurance_amount "
             "FROM contractors WHERE status = 'approved' ORDER BY contractor_code"
         )
 

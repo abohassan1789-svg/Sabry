@@ -187,8 +187,9 @@ def test_net_and_remaining_come_from_the_extract():
 
 def test_payment_balance_new_and_edited():
     new = payment_balance("300000", "200000", 0, "30,000")
-    assert new == {"net": Decimal("300000"), "previous": Decimal("200000"), "this": Decimal("30000"),
-                   "remaining": Decimal("70000")}
+    assert new == {"opening": Decimal("0"), "net": Decimal("300000"), "previous": Decimal("200000"),
+                   "this": Decimal("30000"), "remaining": Decimal("70000")}
+    assert payment_balance("300000", "200000", 0, "30,000", "5000")["remaining"] == Decimal("75000")  # + أول المدة
     edited = payment_balance("300000", "200000", "50000", "80000")  # its own 50,000 isn't counted twice
     assert edited["previous"] == Decimal("150000") and edited["remaining"] == Decimal("70000")
     assert payment_balance("100", "100", 0, "20")["remaining"] == Decimal("-20")
@@ -319,7 +320,9 @@ def test_extract_lists_start_with_general_and_show_what_is_left(screen):
 
 def test_balance_strip_of_the_open_payment(screen):
     stats = {key: label.text() for key, label in screen.tree_stats.items()}
-    assert stats == {"net": "300,000.00", "previous": "150,000.00", "this": "50,000.00", "remaining": "100,000.00"}
+    # An extract has no رصيد أول المدة of its own (it's the contractor's card's).
+    assert stats == {"opening": "—", "net": "300,000.00", "previous": "150,000.00", "this": "50,000.00",
+                     "remaining": "100,000.00"}
     assert screen.board_remaining.text() == "100,000.00"
     assert screen.tree_warning.isHidden()
 
@@ -478,7 +481,8 @@ def test_choosing_general_opens_the_projects_general_payment(screen):
     assert screen.tree.currentItem().data(0, Qt.UserRole) == ("g", 1, 10, 11)
     # the project's balance: 400,000 net − 300,000 on extracts − 20,000 general
     stats = {key: label.text() for key, label in screen.tree_stats.items()}
-    assert stats == {"net": "400,000.00", "previous": "300,000.00", "this": "20,000.00", "remaining": "80,000.00"}
+    assert stats == {"opening": "0.00", "net": "400,000.00", "previous": "300,000.00", "this": "20,000.00",
+                     "remaining": "80,000.00"}  # the fake card has no رصيد أول المدة
     assert screen._captions["tree_stat_net"].text() == "صافي مستخلصات المشروع"
     assert "المشروع" in screen.board_remaining_caption.text()
     assert "الدفعات العامة" in screen.tree_table_title.text()
@@ -657,7 +661,9 @@ def test_a_draft_payment_is_listed_but_not_totalled(screen):
 def test_a_draft_payment_is_counted_once_in_its_balance(screen):
     _with_draft(screen)  # EX-02: net 300,000, approved payments 150,000, this draft 50,000
     stats = {key: label.text() for key, label in screen.tree_stats.items()}
-    assert stats == {"net": "300,000.00", "previous": "150,000.00", "this": "50,000.00", "remaining": "100,000.00"}
+    # An extract has no رصيد أول المدة of its own (it's the contractor's card's).
+    assert stats == {"opening": "—", "net": "300,000.00", "previous": "150,000.00", "this": "50,000.00",
+                     "remaining": "100,000.00"}
     screen.edit_record()
     assert screen.tree_stats["previous"].text() == "150,000.00"
 
@@ -831,7 +837,7 @@ def test_general_insurance_payment_shows_the_whole_project(screen):
     screen.tree_extract.setCurrentIndex(screen.tree_extract.findData(GENERAL))
     _pick_account(screen.fields, "تأمين أعمال")
     screen.fields.amount.setText("500")
-    assert screen._captions["tree_stat_net"].text() == "تأمين أعمال المحجوز من مستخلصات المشروع"
+    assert screen._captions["tree_stat_net"].text() == "تأمين أعمال المحجوز من المشروع"
     assert (screen.tree_stats["net"].text(), screen.tree_stats["previous"].text(),
             screen.tree_stats["remaining"].text()) == ("20,000.00", "6,000.00", "13,500.00")
 
@@ -847,3 +853,29 @@ def test_paying_more_than_the_insurance_left_warns_and_asks(screen, monkeypatch)
     assert "المتبقي من تأمين أعمال على المستخلص" in screen.tree_warning.text()
     screen.save_record()
     assert screen.service.saved == [] and "المتبقي من تأمين أعمال على المستخلص بـ 2,000.00" in asked[0]
+
+
+
+# --- رصيد أول المدة on the balance strip (user, 2026-10-07) ----------------------------------------
+
+def test_a_general_payment_counts_the_cards_opening_balance(screen):
+    screen.contractors[0].update(current_balance=Decimal("10000"), works_insurance_amount=Decimal("700"))
+    screen.new_payment()
+    screen.tree_extract.setCurrentIndex(screen.tree_extract.findData(GENERAL))
+    _pick_account(screen.fields, "رصيد جاري")
+    screen.fields.amount.setText("1000")
+    assert screen._captions["tree_stat_opening"].text() == "رصيد أول المدة (بطاقة المقاول)"
+    # 10,000 on the card + 400,000 net on the project − 320,000 paid − 1,000 now.
+    assert (screen.tree_stats["opening"].text(), screen.tree_stats["remaining"].text()) == ("10,000.00", "89,000.00")
+    _pick_account(screen.fields, "تأمين أعمال")
+    assert screen._captions["tree_stat_opening"].text() == "تأمين أعمال أول المدة (بطاقة المقاول)"
+    assert (screen.tree_stats["opening"].text(), screen.tree_stats["remaining"].text()) == ("700.00", "-300.00")
+    assert screen.board_remaining.text() == "-300.00"
+
+
+def test_an_extract_payment_leaves_the_opening_out(screen):
+    screen.contractors[0].update(current_balance=Decimal("10000"))
+    screen.new_payment()
+    _pick_account(screen.fields)
+    assert screen.tree_stats["opening"].text() == "—"
+    assert screen.tree_stats["remaining"].text() == "100,000.00"  # the extract's own: 300,000 − 200,000

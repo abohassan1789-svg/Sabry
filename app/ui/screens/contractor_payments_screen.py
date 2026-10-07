@@ -63,6 +63,7 @@ from app.security.session_context import SESSION
 from app.services.contracting_approval import APPROVED, ApprovalError, approved_only
 from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_payment_service import (
+    ACCOUNT_OPENING,
     ACCOUNT_TYPES,
     CURRENT_BALANCE,
     GENERAL_LABEL,
@@ -565,7 +566,8 @@ class ContractorPaymentsScreen(QWidget):
         strip = QHBoxLayout()
         strip.setSpacing(10)
         self.tree_stats: dict[str, QLabel] = {}
-        for key, caption, color in (("net", "صافي المستخلص", TEXT), ("previous", "المدفوع سابقاً", BLUE),
+        for key, caption, color in (("opening", "رصيد أول المدة", MUTED), ("net", "صافي المستخلص", TEXT),
+                                    ("previous", "المدفوع سابقاً", BLUE),
                                     ("this", "هذه الدفعة", GREEN_DARK), ("remaining", "المتبقي بعد الدفعة", AMBER)):
             tile, value = self._stat_tile(f"tree_stat_{key}", caption, color)
             self.tree_stats[key] = value
@@ -1105,7 +1107,8 @@ class ContractorPaymentsScreen(QWidget):
     def current_balance(self) -> dict[str, Decimal] | None:
         """Where the payment on screen leaves the balance of its نوع الحساب (user, 2026-10-07):
         on its extract — or, for a general payment, on the project (all the contractor's extracts
-        on it). رصيد جاري = صافي المستخلص; an insurance = what the extracts held back for it.
+        on it) plus that type's رصيد أول المدة from the contractor's card. رصيد جاري = صافي
+        المستخلص; an insurance = what the extracts held back for it.
         None: no project, or no نوع الحساب, chosen."""
         record = self.current_record or {}
         account_type = self.fields.account.currentData()
@@ -1130,18 +1133,27 @@ class ContractorPaymentsScreen(QWidget):
         # An approved payment is already inside ``paid`` (a draft is not): count it once, as «this».
         counted = saved if record.get("status") == APPROVED else Decimal("0")
         amount = self.fields.amount.text() if self.mode != "view" else saved
-        return payment_balance(net, paid, counted, amount)
+        # رصيد أول المدة is the contractor's, not an extract's: it joins the general payment only.
+        opening = self._card_opening(account_type) if self.extract_id is None else Decimal("0")
+        return payment_balance(net, paid, counted, amount, opening)
+
+    def _card_opening(self, account_type: Any) -> Decimal:
+        """The نوع الحساب's رصيد أول المدة on the chosen contractor's card."""
+        card = next((c for c in self.contractors if str(c.get("contractor_id")) == str(self.contractor_id)), {})
+        return to_decimal(card.get(ACCOUNT_OPENING.get(account_type, "current_balance")))
 
     def _update_balance(self, *_args) -> None:
         if not hasattr(self, "tabs"):
             return
         balance = self.current_balance()
         captions = self._balance_captions()
-        for key in ("net", "previous", "remaining"):
+        for key in ("opening", "net", "previous", "remaining"):
             self._captions[f"tree_stat_{key}"].setText(captions[key])
         self.board_remaining_caption.setText(captions["board"])
         for key, label in self.tree_stats.items():
             label.setText(_money(balance[key]) if balance else "—")
+        if self.extract_id is not None:  # an extract has no رصيد أول المدة of its own
+            self.tree_stats["opening"].setText("—")
         self.board_remaining.setText(_money(balance["remaining"]) if balance else "—")
         over = bool(balance) and balance["remaining"] < 0
         text = f"⚠ المبلغ أكبر من {captions['left']} بـ {_money(-balance['remaining'])}" if over else ""
@@ -1158,12 +1170,14 @@ class ContractorPaymentsScreen(QWidget):
         target = "المشروع" if general else "المستخلص"
         account_type = self.fields.account.currentData()
         if account_type in (None, CURRENT_BALANCE):
-            return {"net": "صافي مستخلصات المشروع" if general else "صافي المستخلص",
+            return {"opening": "رصيد أول المدة (بطاقة المقاول)" if general else "رصيد أول المدة",
+                    "net": "صافي مستخلصات المشروع" if general else "صافي المستخلص",
                     "previous": "المدفوع سابقاً",
                     "remaining": "المتبقي على المشروع بعد الدفعة" if general else "المتبقي بعد الدفعة",
                     "board": f"المتبقي على {target} بعد الدفعة",
                     "left": f"المتبقي على {target}"}
-        return {"net": f"{account_type} المحجوز من {'مستخلصات المشروع' if general else 'المستخلص'}",
+        return {"opening": f"{account_type} أول المدة (بطاقة المقاول)" if general else f"{account_type} أول المدة",
+                "net": f"{account_type} المحجوز من {'المشروع' if general else 'المستخلص'}",  # 5 tiles: keep it short
                 "previous": f"المصروف من {account_type} سابقاً",
                 "remaining": f"المتبقي من {account_type} بعد الدفعة",
                 "board": f"المتبقي من {account_type} بعد الدفعة",  # the board's strip is narrow
