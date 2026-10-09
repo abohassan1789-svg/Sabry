@@ -5,7 +5,8 @@ by side as tabs so they can pick one by using both:
 
 * «الشجرة» (نموذج 4): a tree مقاول ← شركة ← مشروع ← مستخلص on the right; picking
   an extract fills the contractor / company / project, and the form, the
-  extract's balance strip and its payments sit on the left.
+  extract's balance strip and its payments sit on the left. الشركة / المشروع are
+  drop lists there too (user, 2026-10-09): pick from the tree or from the lists.
 * «لوحة المقاول» (نموذج 7): pick the contractor at the top (with his totals),
   then the company, project and extract in the form; his extracts on that
   project show as cards beside all his payments.
@@ -551,11 +552,15 @@ class ContractorPaymentsScreen(QWidget):
         head = QHBoxLayout()
         head.addWidget(_caption("بيانات الدفعة", 16, GREEN))
         head.addStretch(1)
-        head.addWidget(_caption("اختار من الشجرة — الحقول تتملى لوحدها · رقم المستخلص اختياري", 12, "#64748B"))
+        head.addWidget(_caption("اختار من الشجرة أو من القوايم · الشركة والمشروع ورقم المستخلص اختياري", 12,
+                                "#64748B"))
         form_col.addLayout(head)
         self.tree_contractor = self._read_only()
-        self.tree_company = self._read_only()
-        self.tree_project = self._read_only()
+        # Drop lists like the board's (user, 2026-10-09); the tree fills them too.
+        self.tree_company = self._combo()
+        self.tree_company.currentIndexChanged.connect(lambda _i: self._on_company_combo(self.tree_company))
+        self.tree_project = self._combo()
+        self.tree_project.currentIndexChanged.connect(lambda _i: self._on_project_combo(self.tree_project))
         self.tree_extract = self._combo()
         self.tree_extract.currentIndexChanged.connect(lambda _i: self._on_extract_combo(self.tree_extract))
         grid = QGridLayout()
@@ -643,9 +648,9 @@ class ContractorPaymentsScreen(QWidget):
         form_col.setSpacing(7)
         form_col.addWidget(_caption("الدفعة الحالية", 16, GREEN))
         self.board_company = self._combo()
-        self.board_company.currentIndexChanged.connect(self._on_board_company)
+        self.board_company.currentIndexChanged.connect(lambda _i: self._on_company_combo(self.board_company))
         self.board_project = self._combo()
-        self.board_project.currentIndexChanged.connect(self._on_board_project)
+        self.board_project.currentIndexChanged.connect(lambda _i: self._on_project_combo(self.board_project))
         self.board_extract = self._combo()
         self.board_extract.currentIndexChanged.connect(lambda _i: self._on_extract_combo(self.board_extract))
         date_row = QHBoxLayout()
@@ -934,11 +939,11 @@ class ContractorPaymentsScreen(QWidget):
     def _on_board_contractor(self, _index: int) -> None:
         self.select(self.board_contractor.currentData())
 
-    def _on_board_company(self, _index: int) -> None:
-        self.select(self.contractor_id, self.board_company.currentData())
+    def _on_company_combo(self, combo: QComboBox) -> None:
+        self.select(self.contractor_id, combo.currentData())
 
-    def _on_board_project(self, _index: int) -> None:
-        self.select(self.contractor_id, self.company_id, self.board_project.currentData())
+    def _on_project_combo(self, combo: QComboBox) -> None:
+        self.select(self.contractor_id, self.company_id, combo.currentData())
 
     def _on_extract_combo(self, combo: QComboBox) -> None:
         data = combo.currentData()
@@ -1066,8 +1071,13 @@ class ContractorPaymentsScreen(QWidget):
         # tab 4
         self.tree_contractor.setText((contractor or {}).get("contractor_name") or (row or {}).get("contractor_name") or "")
         has_contractor = self.contractor_id is not None
-        self.tree_company.setText((company or {}).get("company_name") or ("بدون شركة" if has_contractor else ""))
-        self.tree_project.setText((project or {}).get("project_name") or ("بدون مشروع" if has_contractor else ""))
+        company_rows = ([{"company_id": NO_PLACE}] + companies) if has_contractor else []
+        company_text = (lambda r: NO_PLACE_TEXT if r["company_id"] == NO_PLACE
+                        else f"{r['company_code']} — {r['company_name']}")
+        company_keep = NO_PLACE if self.company_id is None else self.company_id
+        project_text = lambda r: f"{r['project_code']} — {r['project_name']}"  # noqa: E731
+        self._fill_combo(self.tree_company, company_rows, company_text, "company_id", company_keep)
+        self._fill_combo(self.tree_project, projects, project_text, "project_id", self.project_id)
         choices = ([{"extract_id": GENERAL}] + extracts) if has_contractor else []
         chosen = GENERAL if self.extract_id is None else self.extract_id
         self._fill_combo(self.tree_extract, choices, self._choice_text, "extract_id", chosen)
@@ -1077,12 +1087,8 @@ class ContractorPaymentsScreen(QWidget):
         self.board_contractor.blockSignals(True)
         _select_data(self.board_contractor, self.contractor_id)
         self.board_contractor.blockSignals(False)
-        self._fill_combo(self.board_company, [{"company_id": NO_PLACE}] + companies,
-                         lambda r: NO_PLACE_TEXT if r["company_id"] == NO_PLACE
-                         else f"{r['company_code']} — {r['company_name']}",
-                         "company_id", NO_PLACE if self.company_id is None else self.company_id)
-        self._fill_combo(self.board_project, projects, lambda r: f"{r['project_code']} — {r['project_name']}",
-                         "project_id", self.project_id)
+        self._fill_combo(self.board_company, company_rows, company_text, "company_id", company_keep)
+        self._fill_combo(self.board_project, projects, project_text, "project_id", self.project_id)
         self._fill_combo(self.board_extract, choices, self._choice_text, "extract_id", chosen)
         on_project = project_balance(self.catalog, self.general, self.contractor_id, self.company_id, self.project_id)
         self.board_path.setText(

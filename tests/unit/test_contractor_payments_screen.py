@@ -333,8 +333,8 @@ def test_opens_on_the_latest_payment_of_the_latest_extract(screen):
         assert fields.amount.text() == "50,000.00"
         assert fields.notes.text() == "نقدي"
     assert screen.tree_contractor.text() == "أحمد للمقاولات"
-    assert screen.tree_company.text() == "شركة الأهرام"
-    assert screen.tree_project.text() == "كمبوند الياسمين"
+    assert screen.tree_company.currentText() == "A-H/CO-1001 — شركة الأهرام"
+    assert screen.tree_project.currentText() == "A-H/CO-1001/PR-01 — كمبوند الياسمين"
 
 
 def test_extract_lists_start_with_general_and_show_what_is_left(screen):
@@ -374,7 +374,7 @@ def test_picking_a_project_lists_only_its_extracts(screen):
     assert screen.extract_id == 502
     assert _combo_ids(screen.board_extract) == [GENERAL, 502]
     assert screen.current_id is None and screen.board_fields.amount.text() == ""
-    assert screen.tree_project.text() == "الياسمين 2"  # the other tab follows
+    assert screen.tree_project.currentData() == 12  # the other tab follows
 
 
 def test_picking_a_contractor_walks_the_cascade(screen):
@@ -390,7 +390,7 @@ def test_a_contractor_without_extracts(screen):
     assert screen.board_company.currentData() == NO_PLACE and screen.board_project.count() == 0
     assert _combo_ids(screen.board_extract) == [GENERAL]
     assert "بدون شركة / مشروع" in screen.board_path.text()
-    assert (screen.tree_company.text(), screen.tree_project.text()) == ("بدون شركة", "بدون مشروع")
+    assert screen.tree_company.currentData() == NO_PLACE and screen.tree_project.count() == 0
     assert screen.tree.currentItem().data(0, Qt.UserRole) == ("n", 3)
     assert screen.board_kpis["net"].text() == "0.00"
 
@@ -1012,3 +1012,21 @@ def test_service_saves_a_payment_without_a_project():
          "amount": "1,000", "account_type": "رصيد جاري"})
     insert = next(params for sql, params in db.sql if sql.startswith("INSERT"))
     assert saved == 77 and insert[1:4] == [3, None, None]
+
+
+
+def test_the_tree_tab_picks_company_and_project_from_lists_too(screen):
+    """الشركة / المشروع are drop lists in the tree tab too (user, 2026-10-09)."""
+    assert _combo_ids(screen.tree_company) == [NO_PLACE, 10, 20]
+    assert _combo_ids(screen.tree_project) == [11, 12]
+    screen.tree_project.setCurrentIndex(screen.tree_project.findData(12))
+    assert (screen.project_id, screen.extract_id) == (12, 502)
+    assert screen.board_project.currentData() == 12  # the board follows
+    assert screen.tree.currentItem().data(0, Qt.UserRole) == ("x", 502)
+    screen.tree_company.setCurrentIndex(screen.tree_company.findData(20))
+    assert (screen.company_id, screen.project_id) == (20, 21)
+    screen.tree_company.setCurrentIndex(screen.tree_company.findData(NO_PLACE))
+    assert (screen.company_id, screen.project_id) == (None, None)
+    assert screen.tree.currentItem().data(0, Qt.UserRole) == ("n", 1)
+    screen._on_tree_clicked(screen._tree_items[("x", 500)], 0)  # the tree still fills the lists
+    assert (screen.tree_company.currentData(), screen.tree_project.currentData()) == (10, 11)
