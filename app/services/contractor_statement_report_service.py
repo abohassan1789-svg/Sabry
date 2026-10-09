@@ -202,7 +202,8 @@ def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, A
         "advance_pct": agreed / value * 100 if value > 0 else ZERO,
         "advance_paid": paid,
         "advance_deducted": deducted,
-        "remaining_advance": agreed - deducted,
+        # المتبقي = المقدمة − المصروف فعلاً − المخصوم على المستخلصات (user, 2026-10-09).
+        "remaining_advance": agreed - paid - deducted,
     }
 
 

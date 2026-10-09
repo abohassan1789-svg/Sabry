@@ -155,6 +155,11 @@ def test_advance_payments_go_to_the_contracts_card_only():
     payments = PAYMENTS + [ADVANCE_PAID]
     figures = contract_advance(CONTRACTS, EXTRACTS, payments=payments)
     assert figures["advance_paid"] == Decimal("150000.00")
+    assert figures["remaining_advance"] == Decimal("-18400.00")  # 200,000 − 150,000 − 68,400
+    # The user's case: an advance of 50,000, 10,000 paid, no extract yet → 40,000.
+    one = [{"contract_id": 1, "contract_value": Decimal("500000"), "advance_payment_pct": Decimal("10")}]
+    paid = [dict(ADVANCE_PAID, amount=Decimal("10000"))]
+    assert contract_advance(one, [], payments=paid)["remaining_advance"] == Decimal("40000.00")
     assert contract_advance(CONTRACTS, EXTRACTS, datetime.date(2026, 1, 15), payments)["advance_paid"] == 0
     with_advance, without = build_accounts(CARD, EXTRACTS, payments), build_accounts(CARD, EXTRACTS, PAYMENTS)
     assert all(with_advance[a]["totals"] == without[a]["totals"] for a in without)
@@ -262,7 +267,8 @@ def test_the_cards(screen):
         ("تأمينات اجتماعية", "opening"): "750.00", ("تأمينات اجتماعية", "held"): "0.00",
         ("تأمينات اجتماعية", "paid"): "0.00", ("تأمينات اجتماعية", "balance"): "750.00",
         ("contracts", "contract_value"): "2,000,000.00", ("contracts", "advance_agreed"): "200,000.00",
-        ("contracts", "advance_deducted"): "68,400.00", ("contracts", "remaining_advance"): "131,600.00",
+        # المتبقي = 200,000 − 150,000 paid − 68,400 deducted (user, 2026-10-09).
+        ("contracts", "advance_deducted"): "68,400.00", ("contracts", "remaining_advance"): "-18,400.00",
         ("contracts", "advance_paid"): "150,000.00",
         # ضرائب الخصم: 36,000 on the card + 1% of the two extracts' 400,000 and 200,000.
         ("withholding", "opening"): "36,000.00", ("withholding", "held"): "6,000.00",
