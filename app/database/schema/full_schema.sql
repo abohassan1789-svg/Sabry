@@ -3615,7 +3615,8 @@ UPDATE public.contractor_payments y SET contractor_id = k.contractor_id, project
   FROM public.contractor_extracts x JOIN public.contractor_contracts k ON k.contract_id = x.contract_id
  WHERE x.extract_id = y.extract_id AND (y.contractor_id IS NULL OR y.project_id IS NULL);
 ALTER TABLE public.contractor_payments ALTER COLUMN contractor_id SET NOT NULL;
-ALTER TABLE public.contractor_payments ALTER COLUMN project_id SET NOT NULL;
+-- project_id stays nullable: since 2026-10-09 a payment may have no company / project
+-- (re-adding NOT NULL here failed at startup once such a payment existed).
 ALTER TABLE public.contractor_payments ALTER COLUMN extract_id DROP NOT NULL;
 
 -- طريقة الدفع (2026-09-26): existing payments become نقدي.
