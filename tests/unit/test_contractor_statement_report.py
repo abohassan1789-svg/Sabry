@@ -74,6 +74,8 @@ OPENING = Decimal("85000")
 CARD = {"current_balance": OPENING, "works_insurance_amount": Decimal("2000"), "social_insurance_amount": Decimal("750"),
         "withholding_tax_amount": Decimal("36000")}
 WORKS_PAYMENT = dict(_payment(12, (2026, 4, 1), "5000"), account_type="تأمين أعمال")
+# دفعة مقدمة (2026-10-09): only the contracts' advance card counts it, never a statement.
+ADVANCE_PAID = dict(_payment(13, (2026, 1, 20), "150000"), account_type="دفعة مقدمة")
 FROM, TO = datetime.date(2026, 2, 1), datetime.date(2026, 12, 31)
 
 
@@ -149,6 +151,15 @@ def test_withholding_stays_out_of_every_balance():
     assert all(accounts[a]["totals"]["balance"] == without[a]["totals"]["balance"] for a in accounts)
 
 
+def test_advance_payments_go_to_the_contracts_card_only():
+    payments = PAYMENTS + [ADVANCE_PAID]
+    figures = contract_advance(CONTRACTS, EXTRACTS, payments=payments)
+    assert figures["advance_paid"] == Decimal("150000.00")
+    assert contract_advance(CONTRACTS, EXTRACTS, datetime.date(2026, 1, 15), payments)["advance_paid"] == 0
+    with_advance, without = build_accounts(CARD, EXTRACTS, payments), build_accounts(CARD, EXTRACTS, PAYMENTS)
+    assert all(with_advance[a]["totals"] == without[a]["totals"] for a in without)
+
+
 def test_payment_text():
     assert payment_text(PAYMENTS[1] | {"kind": KIND_PAYMENT}) == "دفعة تحويل 784512 — A-H/CT-1001/EX-01"
     assert payment_text(PAYMENTS[2] | {"kind": KIND_PAYMENT}) == "دفعة نقدي — عامة"
@@ -175,8 +186,9 @@ class FakeService:
         self.last_filters = filters
         if filters["contractor_id"] not in (None, 1):  # None = «الكل»: here, the one contractor with movements
             return empty_statement()
-        accounts = build_accounts(CARD, EXTRACTS, PAYMENTS + [WORKS_PAYMENT], filters["date_from"], filters["date_to"])
-        return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"]),
+        payments = PAYMENTS + [WORKS_PAYMENT, ADVANCE_PAID]
+        accounts = build_accounts(CARD, EXTRACTS, payments, filters["date_from"], filters["date_to"])
+        return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"], payments),
                               withholding_total(CARD["withholding_tax_amount"], EXTRACTS,
                                                 filters["date_from"], filters["date_to"]))
 
@@ -251,6 +263,7 @@ def test_the_cards(screen):
         ("تأمينات اجتماعية", "paid"): "0.00", ("تأمينات اجتماعية", "balance"): "750.00",
         ("contracts", "contract_value"): "2,000,000.00", ("contracts", "advance_agreed"): "200,000.00",
         ("contracts", "advance_deducted"): "68,400.00", ("contracts", "remaining_advance"): "131,600.00",
+        ("contracts", "advance_paid"): "150,000.00",
         # ضرائب الخصم: 36,000 on the card + 1% of the two extracts' 400,000 and 200,000.
         ("withholding", "opening"): "36,000.00", ("withholding", "held"): "6,000.00",
         ("withholding", "total"): "42,000.00"}

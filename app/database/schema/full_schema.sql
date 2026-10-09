@@ -3763,3 +3763,15 @@ DO $$ BEGIN
     ALTER TABLE ONLY public.contractor_payments ADD CONSTRAINT ck_contractor_payments_account_type CHECK (account_type IN ('رصيد جاري', 'تأمين أعمال', 'تأمينات اجتماعية'));
   END IF;
 END $$;
+
+-- 2026-10-09: نوع الحساب gains «دفعة مقدمة» (paid out of the contracts' advance). Swap the
+-- three-word CHECK once, only while «دفعة مقدمة» is missing from it.
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'ck_contractor_payments_account_type'
+                   AND conrelid = 'public.contractor_payments'::regclass
+                   AND pg_get_constraintdef(oid) LIKE '%دفعة مقدمة%') THEN
+    ALTER TABLE public.contractor_payments DROP CONSTRAINT IF EXISTS ck_contractor_payments_account_type;
+    ALTER TABLE public.contractor_payments ADD CONSTRAINT ck_contractor_payments_account_type
+      CHECK (account_type IN ('رصيد جاري', 'تأمين أعمال', 'تأمينات اجتماعية', 'دفعة مقدمة'));
+  END IF;
+END $$;

@@ -14,7 +14,9 @@ typed «الرصيد الجاري»)، المستخلصات and دفعات ال�
 
 The contract figures (user, 2026-10-02): the contractor's contracts' value, the
 advance they grant (value × نسبة المقدمة), the advance taken back on their
-extracts up to «إلى», and what is left of it.
+extracts up to «إلى», and what is left of it. Since 2026-10-09 also «المصروف فعلاً»:
+the approved payments of نوع «دفعة مقدمة» up to «إلى». They are in none of the three
+statements below (the user chose this card for them).
 
 The company / project filters narrow the contracts, extracts and payments; the
 typed الرصيد الجاري is the contractor's and always counts.
@@ -49,7 +51,8 @@ from typing import Any
 from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_payment_service import (
     ACCOUNT_OPENING,
-    ACCOUNT_TYPES,
+    ADVANCE_PAYMENT,
+    EXTRACT_ACCOUNT_TYPES,
     CURRENT_BALANCE,
     SOCIAL_INSURANCE,
     WORKS_INSURANCE,
@@ -140,21 +143,21 @@ def build_accounts(card: dict[str, Any], extracts: list[dict[str, Any]], payment
     """The three statements, keyed by نوع الحساب; each opens on its field of the contractor's *card*."""
     return {account: build_statement(card.get(ACCOUNT_OPENING[account]), extracts, payments, date_from, date_to,
                                      account)
-            for account in ACCOUNT_TYPES}
+            for account in EXTRACT_ACCOUNT_TYPES}
 
 
 def account_timeline(accounts: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """For the chart: the period's movements of all types by date, each with the three running
     balances after it (``balances``); the first point is the openings."""
     current = accounts[CURRENT_BALANCE]
-    payments = [line for account in ACCOUNT_TYPES for line in accounts[account]["lines"]
+    payments = [line for account in EXTRACT_ACCOUNT_TYPES for line in accounts[account]["lines"]
                 if line["kind"] == KIND_PAYMENT]
     extracts = [line for line in current["lines"] if line["kind"] == KIND_EXTRACT]
-    balances = {account: accounts[account]["opening"] for account in ACCOUNT_TYPES}
+    balances = {account: accounts[account]["opening"] for account in EXTRACT_ACCOUNT_TYPES}
     points = [{"kind": "opening", "balances": dict(balances)}]
     for line in sorted(extracts + payments, key=_sort_key):
         if line["kind"] == KIND_EXTRACT:
-            for account in ACCOUNT_TYPES:
+            for account in EXTRACT_ACCOUNT_TYPES:
                 balances[account] += line[ACCOUNT_HELD[account]]
         else:
             balances[line["account_type"]] -= line["paid"]
@@ -180,19 +183,24 @@ def withholding_total(card_amount: Any, extracts: list[dict[str, Any]],
 
 
 def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, Any]],
-                     date_to: Any = None) -> dict[str, Any]:
-    """The contracts' value and advance, and how much of it the extracts up to *date_to* took back."""
+                     date_to: Any = None, payments: list[dict[str, Any]] = ()) -> dict[str, Any]:
+    """The contracts' value and advance, how much of it was paid out (*payments* of نوع
+    دفعة مقدمة) and how much the extracts took back — both up to *date_to*."""
     value = sum((_money(to_decimal(c.get("contract_value"))) for c in contracts), ZERO)
     agreed = sum((_money(_money(to_decimal(c.get("contract_value"))) * to_decimal(c.get("advance_payment_pct")) / 100)
                   for c in contracts), ZERO)
     taken = [x for x in extracts if date_to is None or (_day(x.get("extract_date")) or date_to) <= date_to]
     deducted = sum((extract_amounts(x)["advance_payment"] for x in taken), ZERO)
+    paid = sum((_money(to_decimal(p.get("amount"))) for p in payments
+                if p.get("account_type") == ADVANCE_PAYMENT
+                and (date_to is None or (_day(p.get("payment_date")) or date_to) <= date_to)), ZERO)
     return {
         "count": len(contracts),
         "contract_value": value,
         "advance_agreed": agreed,
         # The overall rate: the advance over the contracts' value.
         "advance_pct": agreed / value * 100 if value > 0 else ZERO,
+        "advance_paid": paid,
         "advance_deducted": deducted,
         "remaining_advance": agreed - deducted,
     }
@@ -278,5 +286,5 @@ class ContractorStatementReportService(ContractorContractsReportService):
             params,
         )
         accounts = build_accounts(row, extracts, payments, date_from, date_to)
-        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to),
+        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to, payments),
                               withholding_total(row.get("withholding_tax_amount"), extracts, date_from, date_to))

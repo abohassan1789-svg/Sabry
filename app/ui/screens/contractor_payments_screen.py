@@ -65,6 +65,7 @@ from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_payment_service import (
     ACCOUNT_OPENING,
     ACCOUNT_TYPES,
+    ADVANCE_PAYMENT,
     CURRENT_BALANCE,
     GENERAL_LABEL,
     PAYMENT_METHODS,
@@ -73,6 +74,7 @@ from app.services.contractor_payment_service import (
     PaymentError,
     companies_of,
     contractor_summary,
+    advance_balance_of,
     extract_account,
     extracts_of,
     general_paid,
@@ -253,6 +255,10 @@ class ContractorPaymentsScreen(QWidget):
         self.service = service or ContractorPaymentService()
         self.contractors: list[dict[str, Any]] = []
         self.catalog: list[dict[str, Any]] = []
+        # The approved contracts (a project with no extract yet still takes a دفعة مقدمة)
+        # and the دفعات مقدمة paid per (contractor, project).
+        self.contracts: list[dict[str, Any]] = []
+        self.advance_paid: dict[tuple, Any] = {}
         self.general: dict[tuple, Decimal] = {}  # (contractor, project) -> general payments
         self._captions: dict[str, QLabel] = {}
         self.contractor_id: Any = None
@@ -798,9 +804,12 @@ class ContractorPaymentsScreen(QWidget):
             self.contractors = self.service.contractor_choices()
             self.catalog = self.service.extract_catalog()
             self.general = self.service.general_totals()
+            self.contracts = self.service.contract_catalog()
+            self.advance_paid = self.service.advance_totals()
         except Exception as exc:
             self._show_error("تعذّر تحميل البيانات", exc)
             self.contractors, self.catalog, self.general = [], [], {}
+            self.contracts, self.advance_paid = [], {}
         self._fill_combo(self.board_contractor, self.contractors,
                          lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id", self.contractor_id)
         self._build_tree()
@@ -823,10 +832,10 @@ class ContractorPaymentsScreen(QWidget):
         of that extract (or the project's latest general payment) opens, else an
         empty form; while creating or editing, the typed values stay and move there.
         """
-        companies = [c["company_id"] for c in companies_of(self.catalog, contractor_id)]
+        companies = [c["company_id"] for c in companies_of(self.catalog, contractor_id, self.contracts)]
         if company_id not in companies:
             company_id = companies[0] if companies else None
-        projects = [p["project_id"] for p in projects_of(self.catalog, contractor_id, company_id)]
+        projects = [p["project_id"] for p in projects_of(self.catalog, contractor_id, company_id, self.contracts)]
         if project_id not in projects:
             project_id = projects[0] if projects else None
         extracts = [x["extract_id"] for x in extracts_of(self.catalog, contractor_id, company_id, project_id)]
@@ -910,14 +919,15 @@ class ContractorPaymentsScreen(QWidget):
     # -- drawing -----------------------------------------------------------------------------------
 
     def _build_tree(self) -> None:
-        """The tree from the catalog; the search box keeps the extracts whose path matches."""
+        """The tree from the catalog; the search box keeps the extracts whose path matches.
+        A project with an approved contract and no extract yet shows with its «دفعات عامة» only."""
         needle = self.tree_search.text().strip().lower()
         self.tree.blockSignals(True)
         self.tree.clear()
         self._tree_items = {}
         bold = self.tree.font()
         bold.setBold(True)
-        for row in self.catalog:
+        for row in [*self.catalog, *self.contracts]:
             if needle:
                 path = " ".join(str(row.get(k) or "") for k in (
                     "contractor_code", "contractor_name", "company_name", "project_name", "extract_no")).lower()
@@ -949,6 +959,8 @@ class ContractorPaymentsScreen(QWidget):
                         item.addChild(general)
                         self._tree_items[("g", *key[1:])] = general
                 parent = self._tree_items[key]
+            if "extract_id" not in row:  # a contract: its path is enough
+                continue
             remaining = to_decimal(row["remaining"])
             leaf = QTreeWidgetItem([f"🧾 {row['extract_no']}", "مسدد" if remaining <= 0 else f"متبقي {_money(remaining)}"])
             leaf.setData(0, Qt.UserRole, ("x", row["extract_id"]))
@@ -980,8 +992,8 @@ class ContractorPaymentsScreen(QWidget):
     def _sync(self) -> None:
         """Every view of the selection, in both tabs."""
         row = self._catalog_row(self.extract_id)
-        companies = companies_of(self.catalog, self.contractor_id)
-        projects = projects_of(self.catalog, self.contractor_id, self.company_id)
+        companies = companies_of(self.catalog, self.contractor_id, self.contracts)
+        projects = projects_of(self.catalog, self.contractor_id, self.company_id, self.contracts)
         extracts = extracts_of(self.catalog, self.contractor_id, self.company_id, self.project_id)
         contractor = next((c for c in self.contractors if str(c["contractor_id"]) == str(self.contractor_id)), None)
         company = next((c for c in companies if c["company_id"] == self.company_id), None)
@@ -1114,7 +1126,15 @@ class ContractorPaymentsScreen(QWidget):
         account_type = self.fields.account.currentData()
         if account_type is None:
             return None
-        if self.extract_id is not None:
+        if account_type == ADVANCE_PAYMENT:
+            # Out of the project's contracts' advance, with or without an extract (user, 2026-10-09).
+            if self.project_id is None:
+                return None
+            on_project = advance_balance_of(self.contracts, self.advance_paid, self.contractor_id, self.project_id)
+            net, paid = on_project["net"], on_project["paid"]
+            mine = (str(record.get("contractor_id")) == str(self.contractor_id)
+                    and str(record.get("project_id")) == str(self.project_id))
+        elif self.extract_id is not None:
             row = self._catalog_row(self.extract_id)
             if row is None:
                 return None
@@ -1138,9 +1158,11 @@ class ContractorPaymentsScreen(QWidget):
         return payment_balance(net, paid, counted, amount, opening)
 
     def _card_opening(self, account_type: Any) -> Decimal:
-        """The نوع الحساب's رصيد أول المدة on the chosen contractor's card."""
+        """The نوع الحساب's رصيد أول المدة on the chosen contractor's card (دفعة مقدمة has none)."""
+        if account_type not in ACCOUNT_OPENING:
+            return Decimal("0")
         card = next((c for c in self.contractors if str(c.get("contractor_id")) == str(self.contractor_id)), {})
-        return to_decimal(card.get(ACCOUNT_OPENING.get(account_type, "current_balance")))
+        return to_decimal(card.get(ACCOUNT_OPENING[account_type]))
 
     def _update_balance(self, *_args) -> None:
         if not hasattr(self, "tabs"):
@@ -1152,7 +1174,8 @@ class ContractorPaymentsScreen(QWidget):
         self.board_remaining_caption.setText(captions["board"])
         for key, label in self.tree_stats.items():
             label.setText(_money(balance[key]) if balance else "—")
-        if self.extract_id is not None:  # an extract has no رصيد أول المدة of its own
+        # An extract has no رصيد أول المدة of its own, nor has دفعة مقدمة.
+        if self.extract_id is not None or self.fields.account.currentData() == ADVANCE_PAYMENT:
             self.tree_stats["opening"].setText("—")
         self.board_remaining.setText(_money(balance["remaining"]) if balance else "—")
         over = bool(balance) and balance["remaining"] < 0
@@ -1169,6 +1192,13 @@ class ContractorPaymentsScreen(QWidget):
         general = self.extract_id is None
         target = "المشروع" if general else "المستخلص"
         account_type = self.fields.account.currentData()
+        if account_type == ADVANCE_PAYMENT:  # the project's contracts, with or without an extract
+            return {"opening": "رصيد أول المدة",
+                    "net": "مقدمة العقد (القيمة × النسبة)",
+                    "previous": "المصروف من المقدمة سابقاً",
+                    "remaining": "المتبقي من مقدمة العقد بعد الدفعة",
+                    "board": "المتبقي من مقدمة العقد بعد الدفعة",
+                    "left": "المتبقي من مقدمة العقد"}
         if account_type in (None, CURRENT_BALANCE):
             return {"opening": "رصيد أول المدة (بطاقة المقاول)" if general else "رصيد أول المدة",
                     "net": "صافي مستخلصات المشروع" if general else "صافي المستخلص",

@@ -81,6 +81,19 @@ PAYMENTS = {
     903: (None, 1, 11, datetime.date(2026, 9, 20), "20000", "تحت الحساب"),
 }
 GENERAL_TOTALS = {(1, 11): Decimal("20000")}
+# The approved contracts behind the extracts: (contract_id, contractor, project, value, advance %).
+CONTRACT_ROWS = [(601, 1, 11, "1000000", "10"), (602, 1, 12, "200000", "0"), (603, 2, 21, "800000", "5")]
+
+
+def _contract(contract_id, contractor_id, project_id, value, pct):
+    company_id, company_code, company_name, project_code, project_name = _PLACES[project_id]
+    contractor = CONTRACTORS[contractor_id - 1]
+    return {"contract_id": contract_id, "contract_no": f"K-{contract_id}", "contract_value": Decimal(value),
+            "advance_payment_pct": Decimal(pct), "advance_agreed": Decimal(value) * Decimal(pct) / 100,
+            "contractor_id": contractor_id, "contractor_code": contractor["contractor_code"],
+            "contractor_name": contractor["contractor_name"], "company_id": company_id,
+            "company_code": company_code, "company_name": company_name, "project_id": project_id,
+            "project_code": project_code, "project_name": project_name}
 
 
 def _payment(payment_id):
@@ -109,6 +122,12 @@ class FakeService:
 
     def general_totals(self):
         return dict(GENERAL_TOTALS)
+
+    def contract_catalog(self):
+        return [_contract(*row) for row in CONTRACT_ROWS] + list(getattr(self, "extra_contracts", []))
+
+    def advance_totals(self):
+        return dict(getattr(self, "advance", {}))
 
     def payments(self, contractor_id=None, extract_id=None, project_id=None):
         rows = [_payment(pid) for pid in PAYMENTS]
@@ -722,7 +741,7 @@ from app.ui.screens.contractor_payments_screen import ACCOUNT_PROMPT  # noqa: E4
 
 
 def test_account_types_are_the_users_list():
-    assert ACCOUNT_TYPES == ("رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية")
+    assert ACCOUNT_TYPES == ("رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية", "دفعة مقدمة")
 
 
 def test_a_new_payment_starts_without_an_account_type(screen):
@@ -879,3 +898,48 @@ def test_an_extract_payment_leaves_the_opening_out(screen):
     _pick_account(screen.fields)
     assert screen.tree_stats["opening"].text() == "—"
     assert screen.tree_stats["remaining"].text() == "100,000.00"  # the extract's own: 300,000 − 200,000
+
+
+# --- دفعة مقدمة (user, 2026-10-09) ------------------------------------------------------------------
+
+from app.services.contractor_payment_service import ADVANCE_PAYMENT, advance_balance_of  # noqa: E402
+
+
+def test_advance_balance_is_the_contracts_advance_less_what_was_paid():
+    contracts = [_contract(*row) for row in CONTRACT_ROWS] + [_contract(604, 1, 11, "500000", "20")]
+    balance = advance_balance_of(contracts, {(1, 11): Decimal("30000"), (2, 21): Decimal("1")}, 1, 11)
+    # 1,000,000 × 10% + 500,000 × 20% = 200,000; 30,000 paid already.
+    assert balance == {"net": Decimal("200000"), "paid": Decimal("30000"), "remaining": Decimal("170000")}
+
+
+def test_an_advance_payment_comes_out_of_the_contracts_advance(screen):
+    screen.service.advance = {(1, 11): Decimal("30000")}
+    screen.refresh_all()
+    screen.new_payment()
+    screen.tree_extract.setCurrentIndex(screen.tree_extract.findData(GENERAL))
+    _pick_account(screen.fields, ADVANCE_PAYMENT)
+    screen.fields.amount.setText("20000")
+    stats = {key: label.text() for key, label in screen.tree_stats.items()}
+    # Contract 601: 1,000,000 × 10% = 100,000; 30,000 paid; this one 20,000. No card opening.
+    assert stats == {"opening": "—", "net": "100,000.00", "previous": "30,000.00", "this": "20,000.00",
+                     "remaining": "50,000.00"}
+    assert screen._captions["tree_stat_net"].text() == "مقدمة العقد (القيمة × النسبة)"
+    # With an extract chosen it is still the project's contracts' advance (user: the extract is optional).
+    screen.tree_extract.setCurrentIndex(screen.tree_extract.findData(501))
+    assert screen.tree_stats["remaining"].text() == "50,000.00"
+    screen.fields.amount.setText("80000")
+    assert "المتبقي من مقدمة العقد" in screen.tree_warning.text()
+
+
+def test_a_project_with_a_contract_and_no_extract_takes_payments(screen):
+    screen.service.extra_contracts = [_contract(605, 2, 12, "100000", "10")]
+    screen.refresh_all()
+    screen.select(2, 10, 12)
+    assert (screen.contractor_id, screen.company_id, screen.project_id, screen.extract_id) == (2, 10, 12, None)
+    assert _combo_ids(screen.tree_extract) == [GENERAL]
+    assert ("g", 2, 10, 12) in screen._tree_items
+    screen.new_payment()
+    _pick_account(screen.fields, ADVANCE_PAYMENT)
+    screen.fields.amount.setText("4000")
+    assert screen.tree_stats["net"].text() == "10,000.00"
+    assert screen.tree_stats["remaining"].text() == "6,000.00"

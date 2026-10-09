@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.contractor_payment_service import (
-    ACCOUNT_TYPES,
+    EXTRACT_ACCOUNT_TYPES,
     CURRENT_BALANCE,
     SOCIAL_INSURANCE,
     WORKS_INSURANCE,
@@ -125,6 +125,7 @@ ACCOUNT_CARDS = (
 )
 CONTRACTS_CARD = ("contracts", "الدفعة المقدمة من العقود", "#B45309", "",
                   (("contract_value", "قيمة العقد"), ("advance_agreed", "الدفعة المقدمة"),
+                   ("advance_paid", "المصروف فعلاً"),  # payments of نوع دفعة مقدمة (user, 2026-10-09)
                    ("advance_deducted", "المخصوم"), ("remaining_advance", "المتبقي")))
 # Shown only: the card's ضرائب الخصم + the extracts' (user, 2026-10-07); no balance uses it.
 WITHHOLDING_CARD = ("withholding", "إجمالي ضرائب الخصم", "#BE123C", "",
@@ -184,7 +185,7 @@ class BalanceChart(QWidget):
         timeline = statement.get("timeline") or []
         moved = len(timeline) > 1 or any(timeline and value for value in timeline[0]["balances"].values())
         self.series = ({account: [float(point["balances"][account]) for point in timeline]
-                        for account in ACCOUNT_TYPES} if moved else {})
+                        for account in EXTRACT_ACCOUNT_TYPES} if moved else {})
         self.update()
 
     def paintEvent(self, _event) -> None:  # noqa: N802 (Qt)
@@ -204,7 +205,7 @@ class BalanceChart(QWidget):
         small = QFont(self.font())
         small.setPointSize(8)
         painter.setFont(small)
-        for index, account in enumerate(ACCOUNT_TYPES):  # the legend
+        for index, account in enumerate(EXTRACT_ACCOUNT_TYPES):  # the legend
             x = 20 + index * 150
             painter.setPen(QPen(QColor(ACCENT[account]), 3))
             painter.drawLine(QPointF(x - 6, 16), QPointF(x + 6, 16))
@@ -278,7 +279,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
     def _load_columns(self) -> dict[str, tuple[str, ...]]:
         """Every tab's saved choice, or that tab's own three figures if never saved."""
         return {account: load_columns(self.settings, self._settings_key(account), COLUMN_KEYS, TAB_DEFAULTS[account])
-                for account in ACCOUNT_TYPES}
+                for account in EXTRACT_ACCOUNT_TYPES}
 
     @property
     def visible_columns(self) -> tuple[str, ...]:
@@ -368,7 +369,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         self.account_tabs = QTabBar()
         self.account_tabs.setDrawBase(False)
         self.account_tabs.setExpanding(False)
-        for account in ACCOUNT_TYPES:
+        for account in EXTRACT_ACCOUNT_TYPES:
             self.account_tabs.addTab(TAB_TITLES[account])
         self.account_tabs.setStyleSheet(
             "QTabBar::tab { background:#FFFFFF; color:#334155; border:1px solid #D9E2EC; border-radius:8px; "
@@ -386,7 +387,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         return layout
 
     def _on_account_tab(self, index: int) -> None:
-        self.account = ACCOUNT_TYPES[index] if 0 <= index < len(ACCOUNT_TYPES) else CURRENT_BALANCE
+        self.account = EXTRACT_ACCOUNT_TYPES[index] if 0 <= index < len(EXTRACT_ACCOUNT_TYPES) else CURRENT_BALANCE
         self._update_count()
         self._apply_columns()  # each tab shows its own columns
         self._fill_table()
@@ -430,7 +431,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         filters = self.filters()
         self.statement = self.service.statement(**filters)
         accounts, contracts = self.statement["accounts"], self.statement["contracts"]
-        sources = {account: accounts[account]["totals"] for account in ACCOUNT_TYPES}
+        sources = {account: accounts[account]["totals"] for account in EXTRACT_ACCOUNT_TYPES}
         sources["contracts"] = contracts
         sources["withholding"] = withholding = self.statement["withholding"]
         for key, _title, _accent, _field, figures in CARDS:
@@ -439,7 +440,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
                 label = self.card_values[(key, figure)]
                 label.setText(_money(value))
                 label.setStyleSheet(self._card_styles[(key, figure)] + (f" color:{RED};" if value < 0 else ""))
-        for account in ACCOUNT_TYPES:
+        for account in EXTRACT_ACCOUNT_TYPES:
             totals = sources[account]
             self.card_hints[account].setText(
                 f"{totals['extracts_count']} مستخلصات · {totals['payments_count']} دفعات"
