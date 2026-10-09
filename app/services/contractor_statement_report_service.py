@@ -280,7 +280,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
             "x.extract_no, d.contractor_name "
             "FROM contractor_payments y "
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
-            "JOIN company_projects p ON p.project_id = y.project_id "
+            "LEFT JOIN company_projects p ON p.project_id = y.project_id "  # a payment may have no project
             "LEFT JOIN contractor_extracts x ON x.extract_id = y.extract_id "
             "WHERE y.status = 'approved' AND d.status = 'approved' AND " + " AND ".join(payment_where),
             params,

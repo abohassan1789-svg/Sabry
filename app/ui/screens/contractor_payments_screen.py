@@ -21,6 +21,10 @@ Both tabs show the same selection and payment; switching tabs is locked while
 editing. The selection may change while creating or editing (it moves the
 payment to the chosen extract); opening another payment may not.
 
+الشركة والمشروع are optional (user, 2026-10-09): a contractor just coded may be paid
+straight away. The company list offers «بدون شركة / مشروع» first, then every approved
+company (and its projects); the tree has «دفعات بدون مشروع» under every contractor.
+
 مسودة / معتمد (2026-10-02): «حفظ» keeps a payment as a draft, «اعتماد» /
 «إلغاء الاعتماد» (``ApprovalControls``) move it. Only approved extracts can be
 paid, and the balances count approved payments only; the tables list the drafts
@@ -83,6 +87,7 @@ from app.services.contractor_payment_service import (
     payment_balance,
     project_balance,
     projects_of,
+    unassigned_paid,
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.dialogs.contractor_payment_picker import ContractorPaymentPickerDialog
@@ -109,6 +114,10 @@ CARD_COLUMNS = 3
 GENERAL = 0
 GENERAL_TEXT = "— دفعة عامة (بدون مستخلص) —"
 AUTO = object()  # select(): «pick the latest extract» (None means general)
+# «بدون شركة / مشروع» (2026-10-09): the company combo's first choice, and what select() takes for it
+# (a None company there means «the contractor's first one»). The state holds None for both.
+NO_PLACE = "none"
+NO_PLACE_TEXT = "— بدون شركة / مشروع —"
 ACCOUNT_PROMPT = "— اختار نوع الحساب —"  # starts empty: a draft may stay so, اعتماد needs one
 
 _TABLE_QSS = (
@@ -259,6 +268,8 @@ class ContractorPaymentsScreen(QWidget):
         # and the دفعات مقدمة paid per (contractor, project).
         self.contracts: list[dict[str, Any]] = []
         self.advance_paid: dict[tuple, Any] = {}
+        # Every approved company / project: what الشركة / المشروع may be (2026-10-09).
+        self.places: list[dict[str, Any]] = []
         self.general: dict[tuple, Decimal] = {}  # (contractor, project) -> general payments
         self._captions: dict[str, QLabel] = {}
         self.contractor_id: Any = None
@@ -783,7 +794,7 @@ class ContractorPaymentsScreen(QWidget):
         if self.current_id is not None:
             self.load_payment(self.current_id)
         else:
-            self.select(contractor, self.company_id, self.project_id,
+            self.select(contractor, self._company_choice(), self.project_id,
                         self.extract_id if self.project_id is not None else AUTO)
 
     def reload_lists(self) -> None:
@@ -806,13 +817,30 @@ class ContractorPaymentsScreen(QWidget):
             self.general = self.service.general_totals()
             self.contracts = self.service.contract_catalog()
             self.advance_paid = self.service.advance_totals()
+            self.places = self.service.project_catalog()
         except Exception as exc:
             self._show_error("تعذّر تحميل البيانات", exc)
             self.contractors, self.catalog, self.general = [], [], {}
-            self.contracts, self.advance_paid = [], {}
+            self.contracts, self.advance_paid, self.places = [], {}, []
         self._fill_combo(self.board_contractor, self.contractors,
                          lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id", self.contractor_id)
         self._build_tree()
+
+    def _company_choice(self) -> Any:
+        """The company to pass back to select(): NO_PLACE when the contractor's payment has none."""
+        return NO_PLACE if self.contractor_id is not None and self.company_id is None else self.company_id
+
+    def _all_companies(self) -> list[dict[str, Any]]:
+        seen, out = set(), []
+        for row in self.places:
+            if row["company_id"] not in seen:
+                seen.add(row["company_id"])
+                out.append({k: row[k] for k in ("company_id", "company_code", "company_name")})
+        return out
+
+    def _all_projects(self, company_id: Any) -> list[dict[str, Any]]:
+        return [{k: row[k] for k in ("project_id", "project_code", "project_name")}
+                for row in self.places if str(row["company_id"]) == str(company_id)]
 
     def _fill_combo(self, combo: QComboBox, rows: list[dict[str, Any]], text, key: str, keep: Any) -> None:
         combo.blockSignals(True)
@@ -832,12 +860,20 @@ class ContractorPaymentsScreen(QWidget):
         of that extract (or the project's latest general payment) opens, else an
         empty form; while creating or editing, the typed values stay and move there.
         """
-        companies = [c["company_id"] for c in companies_of(self.catalog, contractor_id, self.contracts)]
-        if company_id not in companies:
-            company_id = companies[0] if companies else None
-        projects = [p["project_id"] for p in projects_of(self.catalog, contractor_id, company_id, self.contracts)]
-        if project_id not in projects:
-            project_id = projects[0] if projects else None
+        # Any approved company / project may be chosen; by default the contractor's own (extracts or
+        # contracts), else none — a contractor with neither is paid without a project (2026-10-09).
+        own = [c["company_id"] for c in companies_of(self.catalog, contractor_id, self.contracts)]
+        if company_id == NO_PLACE:  # == : the combo hands back its own copy of the text
+            company_id = None
+        elif company_id not in [c["company_id"] for c in self._all_companies()] + own:
+            company_id = own[0] if own else None
+        if company_id is None:
+            project_id = None
+        else:
+            mine = [p["project_id"] for p in projects_of(self.catalog, contractor_id, company_id, self.contracts)]
+            every = [p["project_id"] for p in self._all_projects(company_id)]
+            if project_id not in every + mine:
+                project_id = mine[0] if mine else (every[0] if every else None)
         extracts = [x["extract_id"] for x in extracts_of(self.catalog, contractor_id, company_id, project_id)]
         if project_id is None:
             extract_id = None
@@ -864,6 +900,8 @@ class ContractorPaymentsScreen(QWidget):
             return self.service.payments(extract_id=self.extract_id)
         if self.project_id is not None:
             return self.service.payments(contractor_id=self.contractor_id, project_id=self.project_id)
+        if self.contractor_id is not None:
+            return self.service.payments(contractor_id=self.contractor_id, no_project=True)
         return []
 
     def _on_tree_clicked(self, item: QTreeWidgetItem, _col: int) -> None:
@@ -871,6 +909,11 @@ class ContractorPaymentsScreen(QWidget):
         if not key:
             return
         if self.mode == "view" and key[0] == "x" and str(key[1]) == str(self.extract_id):
+            return
+        if key[0] == "n":  # «دفعات بدون مشروع»
+            if self.mode == "view" and self.project_id is None and key[1] == self.contractor_id:
+                return
+            self.select(key[1], NO_PLACE)
             return
         if key[0] == "x":
             row = self._catalog_row(key[1])
@@ -899,12 +942,12 @@ class ContractorPaymentsScreen(QWidget):
 
     def _on_extract_combo(self, combo: QComboBox) -> None:
         data = combo.currentData()
-        self.select(self.contractor_id, self.company_id, self.project_id, None if data == GENERAL else data)
+        self.select(self.contractor_id, self._company_choice(), self.project_id, None if data == GENERAL else data)
 
     def _on_card_clicked(self, extract_id: Any) -> None:
         if self.mode == "view" and extract_id == self.extract_id:
             return
-        self.select(self.contractor_id, self.company_id, self.project_id, extract_id)
+        self.select(self.contractor_id, self._company_choice(), self.project_id, extract_id)
 
     def _on_table_clicked(self, table: QTableWidget, row: int) -> None:
         item = table.item(row, 0)
@@ -969,14 +1012,35 @@ class ContractorPaymentsScreen(QWidget):
                 leaf.setForeground(0, QBrush(QColor("#94A3B8")))
             parent.addChild(leaf)
             self._tree_items[("x", row["extract_id"])] = leaf
+        # Every contractor, even one with no contract yet, is paid «بدون مشروع» (2026-10-09).
+        for contractor in self.contractors:
+            key = ("c", contractor["contractor_id"])
+            if needle and key not in self._tree_items and needle not in " ".join(
+                    str(contractor.get(k) or "") for k in ("contractor_code", "contractor_name")).lower():
+                continue
+            node = self._tree_items.get(key)
+            if node is None:
+                node = QTreeWidgetItem([f"👷 {contractor['contractor_name']}", ""])
+                node.setData(0, Qt.UserRole, key)
+                node.setFont(0, bold)
+                self.tree.addTopLevelItem(node)
+                self._tree_items[key] = node
+            paid = unassigned_paid(self.general, contractor["contractor_id"])
+            leaf = QTreeWidgetItem(["💵 دفعات بدون مشروع", f"مدفوع {_money(paid)}" if paid else ""])
+            leaf.setData(0, Qt.UserRole, ("n", contractor["contractor_id"]))
+            leaf.setForeground(0, QBrush(QColor(GREEN_DARK)))
+            leaf.setForeground(1, QBrush(QColor(BLUE)))
+            node.addChild(leaf)
+            self._tree_items[("n", contractor["contractor_id"])] = leaf
         if needle:
             self.tree.expandAll()
         self.tree.blockSignals(False)
         self._mark_tree()
 
     def _mark_tree(self) -> None:
-        key = ("x", self.extract_id) if self.extract_id is not None else (
-            "g", self.contractor_id, self.company_id, self.project_id)
+        key = (("x", self.extract_id) if self.extract_id is not None
+               else ("n", self.contractor_id) if self.project_id is None
+               else ("g", self.contractor_id, self.company_id, self.project_id))
         item = self._tree_items.get(key)
         self.tree.blockSignals(True)
         self.tree.clearSelection()
@@ -992,8 +1056,8 @@ class ContractorPaymentsScreen(QWidget):
     def _sync(self) -> None:
         """Every view of the selection, in both tabs."""
         row = self._catalog_row(self.extract_id)
-        companies = companies_of(self.catalog, self.contractor_id, self.contracts)
-        projects = projects_of(self.catalog, self.contractor_id, self.company_id, self.contracts)
+        companies = self._all_companies()
+        projects = self._all_projects(self.company_id) if self.company_id is not None else []
         extracts = extracts_of(self.catalog, self.contractor_id, self.company_id, self.project_id)
         contractor = next((c for c in self.contractors if str(c["contractor_id"]) == str(self.contractor_id)), None)
         company = next((c for c in companies if c["company_id"] == self.company_id), None)
@@ -1001,9 +1065,10 @@ class ContractorPaymentsScreen(QWidget):
 
         # tab 4
         self.tree_contractor.setText((contractor or {}).get("contractor_name") or (row or {}).get("contractor_name") or "")
-        self.tree_company.setText((company or {}).get("company_name") or "")
-        self.tree_project.setText((project or {}).get("project_name") or "")
-        choices = ([{"extract_id": GENERAL}] + extracts) if self.project_id is not None else []
+        has_contractor = self.contractor_id is not None
+        self.tree_company.setText((company or {}).get("company_name") or ("بدون شركة" if has_contractor else ""))
+        self.tree_project.setText((project or {}).get("project_name") or ("بدون مشروع" if has_contractor else ""))
+        choices = ([{"extract_id": GENERAL}] + extracts) if has_contractor else []
         chosen = GENERAL if self.extract_id is None else self.extract_id
         self._fill_combo(self.tree_extract, choices, self._choice_text, "extract_id", chosen)
         self._mark_tree()
@@ -1012,8 +1077,10 @@ class ContractorPaymentsScreen(QWidget):
         self.board_contractor.blockSignals(True)
         _select_data(self.board_contractor, self.contractor_id)
         self.board_contractor.blockSignals(False)
-        self._fill_combo(self.board_company, companies, lambda r: f"{r['company_code']} — {r['company_name']}",
-                         "company_id", self.company_id)
+        self._fill_combo(self.board_company, [{"company_id": NO_PLACE}] + companies,
+                         lambda r: NO_PLACE_TEXT if r["company_id"] == NO_PLACE
+                         else f"{r['company_code']} — {r['company_name']}",
+                         "company_id", NO_PLACE if self.company_id is None else self.company_id)
         self._fill_combo(self.board_project, projects, lambda r: f"{r['project_code']} — {r['project_name']}",
                          "project_id", self.project_id)
         self._fill_combo(self.board_extract, choices, self._choice_text, "extract_id", chosen)
@@ -1021,7 +1088,7 @@ class ContractorPaymentsScreen(QWidget):
         self.board_path.setText(
             f"🏢 {(company or {}).get('company_name', '—')}   /   📁 {(project or {}).get('project_name', '—')}"
             f"   ·   المتبقي على المشروع {_money(on_project['remaining'])}"
-            if company else "لا توجد مستخلصات لهذا المقاول. أضف عقد ومستخلص الأول.")
+            if company else "بدون شركة / مشروع — الدفعة على حساب المقاول مباشرة (من رصيد أول المدة).")
         self._fill_cards(extracts)
 
         try:
@@ -1039,7 +1106,8 @@ class ContractorPaymentsScreen(QWidget):
         self.board_kpis["count"].setText(str(len(approved_only(contractor_payments))) if has else "—")
         self.tree_table_title.setText(
             f"دفعات المستخلص {row['extract_no']}" if row else
-            "الدفعات العامة على المشروع (بدون مستخلص)" if self.project_id is not None else "الدفعات")
+            "الدفعات العامة على المشروع (بدون مستخلص)" if self.project_id is not None
+            else "دفعات المقاول بدون مشروع" if self.contractor_id is not None else "الدفعات")
         self._fill_table(self.tree_table, extract_payments, with_project=False)
         self._fill_table(self.board_table, contractor_payments, with_project=True)
         self._update_balance()
@@ -1146,6 +1214,10 @@ class ContractorPaymentsScreen(QWidget):
             net, paid = on_project["net"], on_project["paid"]
             mine = (record.get("extract_id") is None and str(record.get("contractor_id")) == str(self.contractor_id)
                     and str(record.get("project_id")) == str(self.project_id))
+        elif self.contractor_id is not None:
+            # No project (2026-10-09): out of the card's رصيد أول المدة less the earlier ones without a project.
+            net, paid = Decimal("0"), unassigned_paid(self.general, self.contractor_id, account_type)
+            mine = record.get("project_id") is None and str(record.get("contractor_id")) == str(self.contractor_id)
         else:
             return None
         mine = mine and record.get("account_type") == account_type  # saved under this type
@@ -1190,7 +1262,7 @@ class ContractorPaymentsScreen(QWidget):
     def _balance_captions(self) -> dict[str, str]:
         """The balance tiles' captions for the نوع الحساب and target (extract or project) on screen."""
         general = self.extract_id is None
-        target = "المشروع" if general else "المستخلص"
+        target = "المستخلص" if not general else "المشروع" if self.project_id is not None else "المقاول"
         account_type = self.fields.account.currentData()
         if account_type == ADVANCE_PAYMENT:  # the project's contracts, with or without an extract
             return {"opening": "رصيد أول المدة",
@@ -1201,13 +1273,14 @@ class ContractorPaymentsScreen(QWidget):
                     "left": "المتبقي من مقدمة العقد"}
         if account_type in (None, CURRENT_BALANCE):
             return {"opening": "رصيد أول المدة (بطاقة المقاول)" if general else "رصيد أول المدة",
-                    "net": "صافي مستخلصات المشروع" if general else "صافي المستخلص",
+                    "net": ("صافي المستخلص" if not general else "صافي مستخلصات المشروع"
+                            if self.project_id is not None else "مستخلصات (بدون مشروع)"),
                     "previous": "المدفوع سابقاً",
-                    "remaining": "المتبقي على المشروع بعد الدفعة" if general else "المتبقي بعد الدفعة",
+                    "remaining": f"المتبقي على {target} بعد الدفعة" if general else "المتبقي بعد الدفعة",
                     "board": f"المتبقي على {target} بعد الدفعة",
                     "left": f"المتبقي على {target}"}
         return {"opening": f"{account_type} أول المدة (بطاقة المقاول)" if general else f"{account_type} أول المدة",
-                "net": f"{account_type} المحجوز من {'المشروع' if general else 'المستخلص'}",  # 5 tiles: keep it short
+                "net": f"{account_type} المحجوز من {target}",  # 5 tiles: keep it short
                 "previous": f"المصروف من {account_type} سابقاً",
                 "remaining": f"المتبقي من {account_type} بعد الدفعة",
                 "board": f"المتبقي من {account_type} بعد الدفعة",  # the board's strip is narrow
@@ -1223,7 +1296,7 @@ class ContractorPaymentsScreen(QWidget):
             return
         if not record:
             self.current_id, self.current_record = None, None
-            self.select(self.contractor_id, self.company_id, self.project_id,
+            self.select(self.contractor_id, self._company_choice(), self.project_id,
                         self.extract_id if self.project_id is not None else AUTO)
             return
         self.current_id, self.current_record = record["payment_id"], dict(record)
@@ -1312,7 +1385,7 @@ class ContractorPaymentsScreen(QWidget):
         if self.current_id is not None:
             self.load_payment(self.current_id)
         else:
-            self.select(self.contractor_id, self.company_id, self.project_id,
+            self.select(self.contractor_id, self._company_choice(), self.project_id,
                         self.extract_id if self.project_id is not None else AUTO)
 
     def delete_record(self) -> None:
@@ -1338,7 +1411,7 @@ class ContractorPaymentsScreen(QWidget):
             return
         self.current_id, self.current_record = None, None
         self._reload_data()
-        self.select(self.contractor_id, self.company_id, self.project_id,
+        self.select(self.contractor_id, self._company_choice(), self.project_id,
                     self.extract_id if self.project_id is not None else AUTO)
         notify_data_changed(self)
 

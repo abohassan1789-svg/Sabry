@@ -224,7 +224,7 @@ class ContractorsDashboardService(ContractorContractsReportService):
             "SELECT y.payment_id, y.amount, y.payment_method, d.contractor_name "
             "FROM contractor_payments y "
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
-            "JOIN company_projects p ON p.project_id = y.project_id " + sql,
+            "LEFT JOIN company_projects p ON p.project_id = y.project_id " + sql,  # a payment may have no project
             params,
         )
         return build_dashboard(contractors, companies, projects, contracts, extracts, payments)

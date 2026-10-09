@@ -3775,3 +3775,7 @@ DO $$ BEGIN
       CHECK (account_type IN ('رصيد جاري', 'تأمين أعمال', 'تأمينات اجتماعية', 'دفعة مقدمة'));
   END IF;
 END $$;
+
+-- 2026-10-09 (user): a payment may go to a contractor straight away, with no company / project
+-- (no contract, no extract). The SET NOT NULL above stays for old databases; this undoes it.
+ALTER TABLE public.contractor_payments ALTER COLUMN project_id DROP NOT NULL;

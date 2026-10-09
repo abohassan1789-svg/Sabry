@@ -19,6 +19,11 @@ and the combo boxes always agree.
 The lists also offer a project where the contractor has an approved contract but no
 extract yet (2026-10-09): a دفعة مقدمة is usually paid before the first extract.
 
+The company and the project are optional too (user, 2026-10-09): a contractor just
+coded may be paid straight away (``project_id`` NULL). When they are chosen, any
+approved company / project may be (``project_catalog``). Such a payment comes out of
+the contractor's card (رصيد أول المدة) less the earlier ones without a project.
+
 Paying more than is left is shown as a warning, not refused (as with the
 advance balance on extracts).
 
@@ -93,11 +98,11 @@ _PAYMENT_SELECT = (
     "SELECT y.payment_id, y.payment_date, y.extract_id, y.amount, y.notes, "
     "y.payment_method, y.reference_no, y.cheque_date, y.account_type, y.status, "
     f"COALESCE(x.extract_no, '{GENERAL_LABEL}') AS extract_no, "
-    "d.contractor_id, d.contractor_name, c.company_id, c.company_name, p.project_id, p.project_name "
+    "d.contractor_id, d.contractor_name, c.company_id, c.company_name, y.project_id, p.project_name "
     "FROM contractor_payments y "
     "JOIN contractors d ON d.contractor_id = y.contractor_id "
-    "JOIN company_projects p ON p.project_id = y.project_id "
-    "JOIN client_companies c ON c.company_id = p.company_id "
+    "LEFT JOIN company_projects p ON p.project_id = y.project_id "  # a payment may have no project
+    "LEFT JOIN client_companies c ON c.company_id = p.company_id "
     "LEFT JOIN contractor_extracts x ON x.extract_id = y.extract_id "
 )
 _PAYMENT_ORDER = "ORDER BY y.payment_date, y.payment_id"
@@ -214,6 +219,17 @@ def general_paid(general: dict[tuple, Any], contractor_id: Any, project_id: Any 
     return total
 
 
+def unassigned_paid(general: dict[tuple, Any], contractor_id: Any, account_type: Any = CURRENT_BALANCE) -> Decimal:
+    """The contractor's general payments of one نوع الحساب with NO project (2026-10-09)."""
+    total = Decimal("0")
+    for key, amount in general.items():
+        contractor, project, *kind = key
+        if (_same(contractor, contractor_id) and project is None
+                and (kind[0] if kind else CURRENT_BALANCE) == account_type):
+            total += to_decimal(amount)
+    return total
+
+
 def project_balance(catalog: list[dict[str, Any]], general: dict[tuple, Any], contractor_id: Any,
                     company_id: Any, project_id: Any, account_type: Any = CURRENT_BALANCE) -> dict[str, Decimal]:
     """One نوع الحساب on the contractor's extracts of a project: what they hold (صافي المستخلصات,
@@ -267,6 +283,15 @@ class ContractorPaymentService:
         """Every extract with its contractor / company / project, net, paid and remaining."""
         return with_net(self._db.fetch_all(_CATALOG_SQL))
 
+    def project_catalog(self) -> list[dict[str, Any]]:
+        """Every approved project with its approved company: what الشركة / المشروع may be."""
+        return self._db.fetch_all(
+            "SELECT c.company_id, c.company_code, c.company_name, p.project_id, p.project_code, p.project_name "
+            "FROM company_projects p JOIN client_companies c ON c.company_id = p.company_id "
+            "WHERE p.status = 'approved' AND c.status = 'approved' "
+            "ORDER BY c.company_code, p.project_code"
+        )
+
     def contract_catalog(self) -> list[dict[str, Any]]:
         """Every approved contract with its contractor / company / project and its advance
         (قيمة العقد × نسبة المقدمة, ``advance_agreed``)."""
@@ -307,11 +332,16 @@ class ContractorPaymentService:
     # -- reading -----------------------------------------------------------
 
     def payments(self, contractor_id: Any = None, extract_id: Any = None,
-                 project_id: Any = None) -> list[dict[str, Any]]:
+                 project_id: Any = None, no_project: bool = False) -> list[dict[str, Any]]:
         """Payments, oldest first: of one extract; the GENERAL ones of a contractor on a
-        project (``contractor_id`` + ``project_id``); all of one contractor; or all."""
+        project (``contractor_id`` + ``project_id``) or with no project (``no_project``);
+        all of one contractor; or all."""
         if extract_id not in (None, ""):
             return self._db.fetch_all(_PAYMENT_SELECT + "WHERE y.extract_id = %s " + _PAYMENT_ORDER, [extract_id])
+        if contractor_id not in (None, "") and no_project:
+            return self._db.fetch_all(
+                _PAYMENT_SELECT + "WHERE y.contractor_id = %s AND y.project_id IS NULL " + _PAYMENT_ORDER,
+                [contractor_id])
         if contractor_id not in (None, "") and project_id not in (None, ""):
             return self._db.fetch_all(
                 _PAYMENT_SELECT + "WHERE y.contractor_id = %s AND y.project_id = %s AND y.extract_id IS NULL "
@@ -345,8 +375,9 @@ class ContractorPaymentService:
         approval.check_unlocked(self._db, approval.PAYMENT, payment_id, "تعديل", allow_approved)
         if data.get("contractor_id") in (None, ""):
             raise PaymentError("اختار اسم المقاول.")
-        if data.get("project_id") in (None, ""):
-            raise PaymentError("اختار اسم الشركة واسم المشروع.")
+        project_id = data.get("project_id")
+        if project_id == "":
+            project_id = None  # الشركة والمشروع اختياريين (user, 2026-10-09)
         if not data.get("payment_date"):
             raise PaymentError("تاريخ الدفعة مطلوب.")
         amount = to_decimal(data.get("amount"))
@@ -375,6 +406,8 @@ class ContractorPaymentService:
         extract_id = data.get("extract_id")
         if extract_id == "":
             extract_id = None
+        if extract_id is not None and project_id is None:
+            raise PaymentError("المستخلص لازم يكون على مشروع: اختار الشركة والمشروع الأول.")
         if extract_id is not None:
             owner = self._db.fetch_one(
                 "SELECT k.contractor_id, k.project_id FROM contractor_extracts x "
@@ -382,11 +415,11 @@ class ContractorPaymentService:
                 [extract_id],
             )
             if not owner or not (_same(owner["contractor_id"], data["contractor_id"])
-                                 and _same(owner["project_id"], data["project_id"])):
+                                 and _same(owner["project_id"], project_id)):
                 raise PaymentError("المستخلص ده مش تبع المقاول والمشروع المختارين.")
         approval.check_parents(self._db, [(approval.CONTRACTOR, data["contractor_id"]),
-                                          (approval.PROJECT, data["project_id"]), (approval.EXTRACT, extract_id)])
-        params = [data["payment_date"], data["contractor_id"], data["project_id"], extract_id, amount, notes or None,
+                                          (approval.PROJECT, project_id), (approval.EXTRACT, extract_id)])
+        params = [data["payment_date"], data["contractor_id"], project_id, extract_id, amount, notes or None,
                   method, reference, cheque_date, account_type]
         if payment_id is None:
             row = self._db.fetch_one(

@@ -98,7 +98,7 @@ def _contract(contract_id, contractor_id, project_id, value, pct):
 
 def _payment(payment_id):
     extract_id, contractor_id, project_id, date, amount, notes = PAYMENTS[payment_id]
-    company_id, _code, company_name, _pcode, project_name = _PLACES[project_id]
+    company_id, _code, company_name, _pcode, project_name = _PLACES.get(project_id, (None,) * 5)
     x = next((r for r in RAW_CATALOG if r["extract_id"] == extract_id), None)
     return {"payment_id": payment_id, "payment_date": date, "extract_id": extract_id, "amount": Decimal(amount),
             "notes": notes, "extract_no": x["extract_no"] if x else "دفعة عامة",
@@ -123,16 +123,24 @@ class FakeService:
     def general_totals(self):
         return dict(GENERAL_TOTALS)
 
+    def project_catalog(self):
+        return [{"company_id": company_id, "company_code": company_code, "company_name": company_name,
+                 "project_id": project_id, "project_code": project_code, "project_name": project_name}
+                for project_id, (company_id, company_code, company_name, project_code, project_name)
+                in _PLACES.items()]
+
     def contract_catalog(self):
         return [_contract(*row) for row in CONTRACT_ROWS] + list(getattr(self, "extra_contracts", []))
 
     def advance_totals(self):
         return dict(getattr(self, "advance", {}))
 
-    def payments(self, contractor_id=None, extract_id=None, project_id=None):
+    def payments(self, contractor_id=None, extract_id=None, project_id=None, no_project=False):
         rows = [_payment(pid) for pid in PAYMENTS]
         if extract_id is not None:
             return [r for r in rows if r["extract_id"] == extract_id]
+        if contractor_id is not None and no_project:
+            return [r for r in rows if r["project_id"] is None and r["contractor_id"] == contractor_id]
         if contractor_id is not None and project_id is not None:
             return [r for r in rows if r["extract_id"] is None and r["contractor_id"] == contractor_id
                     and r["project_id"] == project_id]
@@ -236,7 +244,7 @@ class _NoDb:
 
 @pytest.mark.parametrize("change,message", [
     ({"contractor_id": None}, "المقاول"),
-    ({"project_id": None}, "المشروع"),
+    ({"project_id": None}, "المشروع"),  # an extract needs its project; no project + no extract is fine
     ({"payment_date": ""}, "تاريخ"),
     ({"amount": "0"}, "مبلغ"),
     ({"amount": "-5"}, "مبلغ"),
@@ -359,7 +367,8 @@ def test_board_kpis_and_tables(screen):
 
 def test_picking_a_project_lists_only_its_extracts(screen):
     screen.tabs.setCurrentIndex(TAB_BOARD)
-    assert _combo_ids(screen.board_company) == [10]
+    # «بدون شركة / مشروع» first, then every approved company (2026-10-09).
+    assert _combo_ids(screen.board_company) == [NO_PLACE, 10, 20]
     assert _combo_ids(screen.board_project) == [11, 12]
     screen.board_project.setCurrentIndex(screen.board_project.findData(12))
     assert screen.extract_id == 502
@@ -375,9 +384,14 @@ def test_picking_a_contractor_walks_the_cascade(screen):
 
 
 def test_a_contractor_without_extracts(screen):
+    """No contract, no extract: paid straight away, with no company / project (user, 2026-10-09)."""
     screen.board_contractor.setCurrentIndex(screen.board_contractor.findData(3))
-    assert screen.extract_id is None and screen.board_extract.count() == 0
-    assert "لا توجد مستخلصات" in screen.board_path.text()
+    assert (screen.company_id, screen.project_id, screen.extract_id) == (None, None, None)
+    assert screen.board_company.currentData() == NO_PLACE and screen.board_project.count() == 0
+    assert _combo_ids(screen.board_extract) == [GENERAL]
+    assert "بدون شركة / مشروع" in screen.board_path.text()
+    assert (screen.tree_company.text(), screen.tree_project.text()) == ("بدون شركة", "بدون مشروع")
+    assert screen.tree.currentItem().data(0, Qt.UserRole) == ("n", 3)
     assert screen.board_kpis["net"].text() == "0.00"
 
 
@@ -943,3 +957,58 @@ def test_a_project_with_a_contract_and_no_extract_takes_payments(screen):
     screen.fields.amount.setText("4000")
     assert screen.tree_stats["net"].text() == "10,000.00"
     assert screen.tree_stats["remaining"].text() == "6,000.00"
+
+
+# --- دفعة بدون شركة / مشروع (user, 2026-10-09) -------------------------------------------------------
+
+from app.ui.screens.contractor_payments_screen import NO_PLACE  # noqa: E402
+
+
+def test_a_payment_without_a_project_comes_out_of_the_card(screen):
+    screen.contractors[2].update(current_balance=Decimal("5000"))
+    screen.board_contractor.setCurrentIndex(screen.board_contractor.findData(3))
+    screen.new_payment()
+    _pick_account(screen.fields, "رصيد جاري")
+    screen.fields.amount.setText("1000")
+    assert screen.tree_stats["opening"].text() == "5,000.00"
+    assert screen.tree_stats["net"].text() == "0.00"
+    assert screen.tree_stats["remaining"].text() == "4,000.00"
+    assert screen._captions["tree_stat_remaining"].text() == "المتبقي على المقاول بعد الدفعة"
+    screen.save_record()
+    data, payment_id = screen.service.saved[-1]
+    assert (data["contractor_id"], data["project_id"], data["extract_id"], payment_id) == (3, None, None, None)
+
+
+def test_any_company_may_be_picked_or_none(screen):
+    screen.tabs.setCurrentIndex(TAB_BOARD)
+    screen.board_company.setCurrentIndex(screen.board_company.findData(20))  # no extract of his there
+    assert (screen.company_id, screen.project_id, screen.extract_id) == (20, 21, None)
+    assert _combo_ids(screen.board_extract) == [GENERAL]
+    screen.board_company.setCurrentIndex(screen.board_company.findData(NO_PLACE))
+    assert (screen.contractor_id, screen.company_id, screen.project_id) == (1, None, None)
+    assert screen.tree.currentItem().data(0, Qt.UserRole) == ("n", 1)
+    screen.refresh_all()  # «بدون» survives a refresh
+    assert (screen.company_id, screen.project_id) == (None, None)
+
+
+def test_every_contractor_has_a_no_project_leaf(screen):
+    assert {("n", 1), ("n", 2), ("n", 3)} <= set(screen._tree_items)
+    screen._on_tree_clicked(screen._tree_items[("n", 2)], 0)
+    assert (screen.contractor_id, screen.company_id, screen.project_id) == (2, None, None)
+
+
+def test_service_saves_a_payment_without_a_project():
+    class Db:
+        def __init__(self):
+            self.sql = []
+
+        def fetch_one(self, sql, params=None):
+            self.sql.append((sql, params))
+            return {"payment_id": 77, "status": "approved"}
+
+    db = Db()
+    saved = ContractorPaymentService(db).save_payment(
+        {"contractor_id": 3, "project_id": None, "extract_id": None, "payment_date": "2026-10-09",
+         "amount": "1,000", "account_type": "رصيد جاري"})
+    insert = next(params for sql, params in db.sql if sql.startswith("INSERT"))
+    assert saved == 77 and insert[1:4] == [3, None, None]
