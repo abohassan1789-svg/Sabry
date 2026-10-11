@@ -3780,3 +3780,38 @@ END $$;
 -- 2026-10-09 (user): a payment may go to a contractor straight away, with no company / project
 -- (no contract, no extract). The SET NOT NULL above stays for old databases; this undoes it.
 ALTER TABLE public.contractor_payments ALTER COLUMN project_id DROP NOT NULL;
+
+
+-- 2026-10-11 (user): «خصومات أخرى» في المستخلص بالتفصيل — كل خصم سطر (النوع، السبب، المبلغ).
+--   * contractor_extracts.other_deductions stays the stored total (= the sum of the lines), so
+--     every report, the payments screen and the statement read it exactly as before.
+--   * The lines go with their extract (ON DELETE CASCADE).
+CREATE TABLE IF NOT EXISTS public.contractor_extract_deductions (
+    deduction_id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
+    extract_id integer NOT NULL,
+    line_no integer DEFAULT 1 NOT NULL,
+    deduction_type character varying(80) NOT NULL,          -- نوع الخصم
+    reason character varying(300) DEFAULT '' NOT NULL,       -- سبب الخصم
+    amount numeric(18,2) NOT NULL,                           -- مبلغ الخصم
+    CONSTRAINT ck_extract_deductions_type_not_blank CHECK ((char_length(btrim((deduction_type)::text)) > 0)),
+    CONSTRAINT ck_extract_deductions_amount_positive CHECK ((amount > (0)::numeric))
+);
+
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'pk_extract_deductions' AND conrelid = 'public.contractor_extract_deductions'::regclass) THEN
+    ALTER TABLE ONLY public.contractor_extract_deductions ADD CONSTRAINT pk_extract_deductions PRIMARY KEY (deduction_id);
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_extract_deductions_extract' AND conrelid = 'public.contractor_extract_deductions'::regclass) THEN
+    ALTER TABLE ONLY public.contractor_extract_deductions ADD CONSTRAINT fk_extract_deductions_extract FOREIGN KEY (extract_id) REFERENCES public.contractor_extracts(extract_id) ON UPDATE CASCADE ON DELETE CASCADE;
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_extract_deductions_extract ON public.contractor_extract_deductions USING btree (extract_id, line_no);
+
+-- An extract saved before the detail (a total with no lines) gets one line holding that total,
+-- so nothing changes in its figures. Only extracts with no lines at all: safe on every start.
+INSERT INTO public.contractor_extract_deductions (extract_id, line_no, deduction_type, reason, amount)
+SELECT x.extract_id, 1, 'أخرى', 'رصيد سابق قبل التفصيل', x.other_deductions
+  FROM public.contractor_extracts x
+ WHERE x.other_deductions > 0
+   AND NOT EXISTS (SELECT 1 FROM public.contractor_extract_deductions d WHERE d.extract_id = x.extract_id);

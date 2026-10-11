@@ -18,6 +18,11 @@ of a NEW extract and never touch a saved one.
 Numbers: «<contract no>/EX-01», «/EX-02», ... per contract — suggested,
 editable, only kept unique (trimmed, any case).
 
+خصومات أخرى بالتفصيل (2026-10-11): each extract may carry lines in
+``contractor_extract_deductions`` (نوع الخصم، سبب الخصم، مبلغ الخصم).
+``other_deductions`` stays the stored total and is always the sum of the lines,
+so every report reads it as before. The extract and its lines are saved together.
+
 مسودة / معتمد (``contracting_approval``): «حفظ» keeps an extract as a draft;
 only approved contractors and contracts are offered; an approved extract is
 edited or deleted only after «إلغاء الاعتماد» (or by an admin). The screen
@@ -28,6 +33,7 @@ balance) count approved extracts only.
 from __future__ import annotations
 
 import re
+from contextlib import nullcontext
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
@@ -51,6 +57,15 @@ DEDUCTION_LINES: tuple[tuple[str, str], ...] = (
     ("works_insurance", "تأمين الأعمال"),
     ("social_insurance", "التأمينات الاجتماعية"),
 )
+
+# نوع الخصم: the starter list (user, 2026-10-11); a type typed once is offered afterwards too.
+DEDUCTION_TYPE_OPTIONS: tuple[str, ...] = (
+    "غرامة تأخير", "مواد مسحوبة", "مياه وكهرباء", "إصلاح أعمال معيبة", "معدات", "جزاءات", "أخرى",
+)
+# An extract saved before the detail shows its total as one line like this (as the schema converts it).
+LEGACY_DEDUCTION_TYPE = "أخرى"
+LEGACY_DEDUCTION_REASON = "رصيد سابق قبل التفصيل"
+DEDUCTION_TYPE_MAX, DEDUCTION_REASON_MAX = 80, 300
 
 _CENT = Decimal("0.01")
 
@@ -98,6 +113,39 @@ def extract_amounts(record: dict[str, Any]) -> dict[str, Decimal]:
         "deductions": deductions,
         "net": _money(works) - deductions,
     }
+
+
+def clean_deductions(lines: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """The deduction lines checked and tidied, in order; raises ExtractError on a bad line."""
+    cleaned = []
+    for number, line in enumerate(lines or [], start=1):
+        kind = _clean(line.get("deduction_type"))
+        reason = _clean(line.get("reason"))
+        amount = _money(to_decimal(line.get("amount")))
+        if not kind:
+            raise ExtractError(f"اكتب نوع الخصم في السطر {number}.")
+        if len(kind) > DEDUCTION_TYPE_MAX:
+            raise ExtractError(f"نوع الخصم في السطر {number} أطول من {DEDUCTION_TYPE_MAX} حرف.")
+        if len(reason) > DEDUCTION_REASON_MAX:
+            raise ExtractError(f"سبب الخصم في السطر {number} أطول من {DEDUCTION_REASON_MAX} حرف.")
+        if amount <= 0:
+            raise ExtractError(f"مبلغ الخصم في السطر {number} لازم يكون أكبر من صفر.")
+        cleaned.append({"deduction_type": kind, "reason": reason, "amount": amount})
+    return cleaned
+
+
+def deductions_total(lines: list[dict[str, Any]] | None) -> Decimal:
+    """إجمالي الخصومات الأخرى = the sum of the lines."""
+    return _money(sum((to_decimal(line.get("amount")) for line in lines or []), Decimal("0")))
+
+
+def deductions_by_type(lines: list[dict[str, Any]] | None) -> list[tuple[str, Decimal]]:
+    """(type, total) per deduction type, biggest first (the dialog's side panel)."""
+    totals: dict[str, Decimal] = {}
+    for line in lines or []:
+        kind = _clean(line.get("deduction_type"))
+        totals[kind] = totals.get(kind, Decimal("0")) + to_decimal(line.get("amount"))
+    return sorted(((k, _money(v)) for k, v in totals.items()), key=lambda item: -item[1])
 
 
 def next_extract_no_from(contract_no: str, codes: list[Any]) -> str:
@@ -240,6 +288,23 @@ class ContractorExtractService:
     def get_extract(self, extract_id: Any) -> dict[str, Any] | None:
         return self._db.fetch_one(_EXTRACT_SELECT + "WHERE x.extract_id = %s", [extract_id])
 
+    def deduction_lines(self, extract_id: Any) -> list[dict[str, Any]]:
+        """The extract's «خصومات أخرى» lines, in their order."""
+        return self._db.fetch_all(
+            "SELECT deduction_type, reason, amount FROM contractor_extract_deductions "
+            "WHERE extract_id = %s ORDER BY line_no, deduction_id",
+            [extract_id],
+        )
+
+    def deduction_types(self) -> list[str]:
+        """نوع الخصم choices: the starter list, then every other type already used."""
+        rows = self._db.fetch_all(
+            "SELECT DISTINCT btrim(deduction_type) AS deduction_type FROM contractor_extract_deductions "
+            "ORDER BY 1"
+        )
+        used = [row["deduction_type"] for row in rows if row["deduction_type"] not in DEDUCTION_TYPE_OPTIONS]
+        return [*DEDUCTION_TYPE_OPTIONS, *used]
+
     # -- numbers -----------------------------------------------------------
 
     def next_extract_no(self, contract_id: Any) -> str:
@@ -263,8 +328,17 @@ class ContractorExtractService:
 
     # -- writing -----------------------------------------------------------
 
-    def save_extract(self, data: dict[str, Any], extract_id: Any = None, allow_approved: bool = False) -> int:
-        """Insert (as a draft) or update an extract; *allow_approved* lets an admin edit an approved one."""
+    def save_extract(self, data: dict[str, Any], extract_id: Any = None, allow_approved: bool = False,
+                     deductions: list[dict[str, Any]] | None = None) -> int:
+        """Insert (as a draft) or update an extract; *allow_approved* lets an admin edit an approved one.
+
+        *deductions*: the «خصومات أخرى» lines. Given, they replace the saved ones and their sum
+        becomes ``other_deductions``, in one transaction with the extract. None leaves the lines alone.
+        """
+        lines = None
+        if deductions is not None:
+            lines = clean_deductions(deductions)
+            data = dict(data, other_deductions=deductions_total(lines))
         approval.check_unlocked(self._db, approval.EXTRACT, extract_id, "تعديل", allow_approved)
         extract_no = _clean(data.get("extract_no"))
         if not extract_no:
@@ -295,21 +369,40 @@ class ContractorExtractService:
         params = [extract_no, data["extract_date"], data["contract_id"], works, rates["vat_pct"],
                   rates["advance_payment_pct"], rates["withholding_tax_pct"], rates["works_insurance_pct"],
                   rates["social_insurance_pct"], other]
-        if extract_id is None:
-            row = self._db.fetch_one(
-                "INSERT INTO contractor_extracts (extract_no, extract_date, contract_id, works_value, vat_pct, "
-                "advance_payment_pct, withholding_tax_pct, works_insurance_pct, social_insurance_pct, "
-                "other_deductions) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING extract_id",
-                params,
+        with self._transaction():
+            if extract_id is None:
+                row = self._db.fetch_one(
+                    "INSERT INTO contractor_extracts (extract_no, extract_date, contract_id, works_value, vat_pct, "
+                    "advance_payment_pct, withholding_tax_pct, works_insurance_pct, social_insurance_pct, "
+                    "other_deductions) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING extract_id",
+                    params,
+                )
+                saved_id = int(row["extract_id"])
+            else:
+                self._db.execute(
+                    "UPDATE contractor_extracts SET extract_no = %s, extract_date = %s, contract_id = %s, "
+                    "works_value = %s, vat_pct = %s, advance_payment_pct = %s, withholding_tax_pct = %s, "
+                    "works_insurance_pct = %s, social_insurance_pct = %s, other_deductions = %s WHERE extract_id = %s",
+                    params + [extract_id],
+                )
+                saved_id = int(extract_id)
+            if lines is not None:
+                self._replace_deductions(saved_id, lines)
+        return saved_id
+
+    def _transaction(self):
+        """One transaction on the shared connection (the extract and its lines, all or nothing)."""
+        connect = getattr(self._db, "connection", None)
+        return connect().transaction() if callable(connect) else nullcontext()
+
+    def _replace_deductions(self, extract_id: int, lines: list[dict[str, Any]]) -> None:
+        self._db.execute("DELETE FROM contractor_extract_deductions WHERE extract_id = %s", [extract_id])
+        for number, line in enumerate(lines, start=1):
+            self._db.execute(
+                "INSERT INTO contractor_extract_deductions (extract_id, line_no, deduction_type, reason, amount) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                [extract_id, number, line["deduction_type"], line["reason"], line["amount"]],
             )
-            return int(row["extract_id"])
-        self._db.execute(
-            "UPDATE contractor_extracts SET extract_no = %s, extract_date = %s, contract_id = %s, works_value = %s, "
-            "vat_pct = %s, advance_payment_pct = %s, withholding_tax_pct = %s, works_insurance_pct = %s, "
-            "social_insurance_pct = %s, other_deductions = %s WHERE extract_id = %s",
-            params + [extract_id],
-        )
-        return int(extract_id)
 
     def delete_extract(self, extract_id: Any, allow_approved: bool = False) -> None:
         approval.check_unlocked(self._db, approval.EXTRACT, extract_id, "حذف", allow_approved)

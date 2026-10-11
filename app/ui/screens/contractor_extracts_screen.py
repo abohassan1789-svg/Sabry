@@ -13,6 +13,10 @@ contract's four rates — shown for reference only. The arithmetic lives in
 ``contractor_extract_service.extract_amounts``. Both tabs work on the same
 contract and extract; switching tabs is locked while editing, and the contract
 can be changed while creating a new extract (not while editing one).
+
+«خصومات أخرى» (2026-10-11): no longer typed. The «إضافة خصم» button beside it
+opens ``ExtractDeductionsDialog`` (نموذج 10) to add / change / delete lines; the
+row shows their total, and «حفظ» saves the extract with its lines.
 """
 
 from __future__ import annotations
@@ -21,12 +25,13 @@ import datetime
 from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer
+from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer, Signal
 from PySide6.QtGui import QKeySequence, QRegularExpressionValidator, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
     QDateEdit,
+    QDialog,
     QDoubleSpinBox,
     QFrame,
     QGridLayout,
@@ -50,7 +55,10 @@ from app.security.session_context import SESSION
 from app.services.contracting_approval import ApprovalError, approved_only
 from app.services.contractor_contract_service import RATE_FIELDS, to_decimal
 from app.services.contractor_extract_service import (
+    DEDUCTION_TYPE_OPTIONS,
     DEFAULT_VAT_PCT,
+    LEGACY_DEDUCTION_REASON,
+    LEGACY_DEDUCTION_TYPE,
     DEFAULT_WORKS_INSURANCE_PCT,
     SOCIAL_OPTIONS,
     VAT_OPTIONS,
@@ -59,10 +67,12 @@ from app.services.contractor_extract_service import (
     ExtractError,
     advance_balance,
     contract_progress,
+    deductions_total,
     extract_amounts,
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.dialogs.contractor_extract_picker import ContractorExtractPickerDialog
+from app.ui.dialogs.extract_deductions_dialog import ExtractDeductionsDialog
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
 from app.ui.common.live_lists import notify_data_changed
 from app.ui.screens.contractor_contracts_screen import (
@@ -151,6 +161,9 @@ class RateCombo(QComboBox):
 class ExtractForm(QWidget):
     """One extract's inputs and every computed amount. ``wide`` = tab 9's layout."""
 
+    # «إضافة خصم» was pressed: the screen opens the deductions dialog for this form.
+    deductions_requested = Signal()
+
     def __init__(self, wide: bool, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.wide = wide
@@ -180,10 +193,19 @@ class ExtractForm(QWidget):
         self.before_tax = self._line_edit("", ltr=True)
         self.before_tax.setReadOnly(True)
         self.before_tax.setFocusPolicy(Qt.NoFocus)
-        self.other_deductions = self._line_edit("0.00", ltr=True)
-        self.other_deductions.setStyleSheet(_EDITOR_QSS.replace(GREEN, RED))
-        self.other_deductions.textChanged.connect(self.recalc)
-        self.other_deductions.editingFinished.connect(lambda: self._format_money(self.other_deductions))
+        # خصومات أخرى: the lines from the dialog; the row shows their total (2026-10-11).
+        self._deduction_lines: list[dict[str, Any]] = []
+        self._editing = False
+        self.deductions_button = QPushButton("إضافة خصم")
+        self.deductions_button.setCursor(Qt.PointingHandCursor)
+        self.deductions_button.setMinimumHeight(36)
+        self.deductions_button.setStyleSheet(
+            f"QPushButton {{ background:#FEF2F2; border:1.5px solid {RED}; border-radius:7px; padding:4px 4px; "
+            f"font-size:{13 if wide else 11}px; font-weight:900; color:{RED}; }}"
+            "QPushButton:hover { background:#FEE2E2; }"
+            "QPushButton:disabled { background:#F8FAFC; border-color:#CBD5E1; color:#94A3B8; }"
+        )
+        self.deductions_button.clicked.connect(self.deductions_requested.emit)
 
         self.rates: dict[str, QWidget] = {}
         self.amounts: dict[str, QLabel] = {}
@@ -290,8 +312,8 @@ class ExtractForm(QWidget):
         caption = QLabel(f"<span style='color:{RED}'>■</span>&nbsp;&nbsp;خصومات أخرى")
         caption.setStyleSheet(f"font-size:14px; font-weight:900; color:{TEXT}; background:transparent; border:none;")
         grid.addWidget(caption, row, 0)
-        self.other_deductions.setFixedWidth(150 if with_base else 110)
-        grid.addWidget(self.other_deductions, row, 1, 1, 2 if with_base else 1)
+        self.deductions_button.setFixedWidth(150 if with_base else 116)
+        grid.addWidget(self.deductions_button, row, 1, 1, 2 if with_base else 1)
         grid.addWidget(self.amounts["other_deductions"], row, amount_col)
         grid.setColumnStretch(amount_col + 1 if self.wide else 0, 1)
         return grid
@@ -429,9 +451,13 @@ class ExtractForm(QWidget):
         self.vat_pct.set_value(record.get("vat_pct"))
         for _key, _label, column, *_rest in LINES:
             self._set_rate(column, record.get(column))
-        self.other_deductions.setText(_money(record.get("other_deductions")))
+        lines = list(record.get("deductions") or [])
+        total = to_decimal(record.get("other_deductions"))
+        if not lines and total > 0:
+            # Saved before the detail and not converted yet: its total, as one line.
+            lines = [{"deduction_type": LEGACY_DEDUCTION_TYPE, "reason": LEGACY_DEDUCTION_REASON, "amount": total}]
         self._suggested_no = ""
-        self.recalc()
+        self.set_deductions(lines)
 
     def clear(self) -> None:
         self.extract_no.clear()
@@ -441,9 +467,8 @@ class ExtractForm(QWidget):
         for _key, _label, column, *_rest in LINES:
             self._set_rate(column, 0)
         self.rates["works_insurance_pct"].setValue(float(DEFAULT_WORKS_INSURANCE_PCT))
-        self.other_deductions.setText("0.00")
         self._suggested_no = ""
-        self.recalc()
+        self.set_deductions([])
 
     def start_new(self, extract_no: str, contract: dict[str, Any] | None) -> None:
         """A blank extract with the defaults the user asked for."""
@@ -472,7 +497,7 @@ class ExtractForm(QWidget):
             "extract_date": self.extract_date.date().toString("yyyy-MM-dd"),
             "works_value": self.works_value.text(),
             "vat_pct": self.vat_pct.value(),
-            "other_deductions": self.other_deductions.text(),
+            "other_deductions": deductions_total(self._deduction_lines),
         }
         for _key, _label, column, *_rest in LINES:
             data[column] = self._rate(column)
@@ -496,14 +521,37 @@ class ExtractForm(QWidget):
             label.setText(_money(amounts[key]))
         self.net_label.setText(_money(amounts["net"]))
 
+    def deduction_lines(self) -> list[dict[str, Any]]:
+        return [dict(line) for line in self._deduction_lines]
+
+    def set_deductions(self, lines: list[dict[str, Any]]) -> None:
+        """The «خصومات أخرى» lines; their total goes into the row and the net."""
+        self._deduction_lines = [dict(line) for line in lines or []]
+        self._update_deductions_button()
+        self.recalc()
+
+    def _update_deductions_button(self) -> None:
+        count = len(self._deduction_lines)
+        suffix = f" ({count})" if count else ""
+        if self._editing:
+            self.deductions_button.setText(f"إضافة خصم{suffix}")
+            self.deductions_button.setEnabled(True)
+        else:
+            # The narrow tab-8 panel has no room for the count here; the total sits beside it.
+            shown = suffix if self.wide else ""
+            self.deductions_button.setText(f"عرض الخصومات{shown}" if count else "لا توجد خصومات")
+            self.deductions_button.setEnabled(count > 0)
+
     def _format_money(self, editor: QLineEdit) -> None:
         text = editor.text().strip()
         if text and not editor.isReadOnly():
             editor.setText(_money(to_decimal(text)))
 
     def set_editing(self, editing: bool) -> None:
-        for editor in (self.extract_no, self.works_value, self.other_deductions):
+        for editor in (self.extract_no, self.works_value):
             editor.setReadOnly(not editing)
+        self._editing = editing
+        self._update_deductions_button()
         self.extract_date.setReadOnly(not editing)
         self.extract_date.setCalendarPopup(editing)
         for control in [self.vat_pct, *self.rates.values()]:
@@ -756,6 +804,7 @@ class ContractorExtractsScreen(QWidget):
         panel_col = QVBoxLayout(panel)
         panel_col.setContentsMargins(0, 0, 0, 0)
         self.card_form = ExtractForm(wide=False)
+        self.card_form.deductions_requested.connect(lambda: self.open_deductions(self.card_form))
         panel_scroll = QScrollArea()
         panel_scroll.setWidgetResizable(True)
         panel_scroll.setFrameShape(QFrame.NoFrame)
@@ -873,6 +922,7 @@ class ContractorExtractsScreen(QWidget):
         form_col = QVBoxLayout(form_card)
         form_col.setContentsMargins(0, 0, 0, 0)
         self.kpi_form = ExtractForm(wide=True)
+        self.kpi_form.deductions_requested.connect(lambda: self.open_deductions(self.kpi_form))
         form_scroll = QScrollArea()
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QFrame.NoFrame)
@@ -1135,6 +1185,8 @@ class ContractorExtractsScreen(QWidget):
     def load_extract(self, extract_id: Any) -> None:
         try:
             record = self.service.get_extract(extract_id)
+            if record:
+                record = dict(record, deductions=self.service.deduction_lines(extract_id))
         except Exception as exc:
             self._show_error("فشل تحميل المستخلص", exc)
             return
@@ -1156,6 +1208,24 @@ class ContractorExtractsScreen(QWidget):
             form.set_advance_context(self.extract_rows, None)
         self.set_mode("view")
         self._mark_selection()
+
+    # -- خصومات أخرى -------------------------------------------------------------------------------
+
+    def open_deductions(self, form: ExtractForm) -> None:
+        """نافذة الخصومات: editable while this form creates / edits the extract, else read-only."""
+        editable = self.mode in {"new", "edit"} and form is self.form
+        try:
+            types = self.service.deduction_types()
+        except Exception:
+            types = list(DEDUCTION_TYPE_OPTIONS)
+        values = form.values()
+        dialog = ExtractDeductionsDialog(
+            form.deduction_lines(), types, editable=editable, extract_no=str(values.get("extract_no") or ""),
+            contractor_name=str((self.contract or {}).get("contractor_name") or ""),
+            works_value=values.get("works_value"), parent=self,
+        )
+        if dialog.exec() == QDialog.Accepted and editable:
+            form.set_deductions(dialog.lines())
 
     # -- «بحث» (F1) ---------------------------------------------------------------------------------
 
@@ -1210,7 +1280,8 @@ class ContractorExtractsScreen(QWidget):
         else:
             data["contract_id"], record_id = (self.current_record or {}).get("contract_id"), self.current_id
         try:
-            saved = self.service.save_extract(data, record_id, allow_approved=self.approval.is_admin)
+            saved = self.service.save_extract(data, record_id, allow_approved=self.approval.is_admin,
+                                              deductions=self.form.deduction_lines())
         except (ExtractError, ApprovalError) as exc:
             QMessageBox.warning(self, "لا يمكن الحفظ", str(exc))
             return

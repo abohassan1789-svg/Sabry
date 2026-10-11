@@ -8,6 +8,8 @@ The user's rules:
   (0/0.365/2.8/3.6) قوائم.
 * الصافي = الأعمال − المقدمة − ض.الخصم − تأمين الأعمال − التأمينات − خصومات أخرى.
 * رقم العقد يعرض بيانات العقد للعلم فقط؛ نسبة المقدمة تبدأ من العقد.
+* خصومات أخرى (2026-10-11): سطور (النوع، السبب، المبلغ) من نافذة «إضافة خصم»
+  (نموذج 10)؛ إجماليها في «خصومات أخرى» والمعادلة كما هي.
 """
 
 from __future__ import annotations
@@ -19,16 +21,22 @@ from decimal import Decimal
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QDialog
 
 from app.services.contractor_extract_service import (
+    DEDUCTION_TYPE_OPTIONS,
     ContractorExtractService,
     ExtractError,
     advance_balance,
+    clean_deductions,
     contract_progress,
+    deductions_by_type,
+    deductions_total,
     extract_amounts,
     next_extract_no_from,
 )
+from app.ui.dialogs import extract_deductions_dialog as dialog_module
+from app.ui.dialogs.extract_deductions_dialog import ExtractDeductionsDialog
 from app.ui.screens import contractor_extracts_screen as screen_module
 from app.ui.screens.contractor_extracts_screen import TAB_CARDS, TAB_KPI, ContractorExtractsScreen
 
@@ -64,6 +72,11 @@ EXTRACTS = {
     500: _extract(500, 100, "A-H/CT-1001/EX-01", "342000", day=5),
     501: _extract(501, 100, "A-H/CT-1001/EX-02", "570000", other="2000", day=15),
     510: _extract(510, 101, "A-H/CT-1002/EX-01", "1140000", adv="15", wht="3", day=20),
+}
+# EX-02's «خصومات أخرى» lines (their sum is its 2,000).
+DEDUCTIONS = {
+    501: [{"deduction_type": "غرامة تأخير", "reason": "تأخير 5 أيام", "amount": Decimal("1500.00")},
+          {"deduction_type": "مياه وكهرباء", "reason": "شهر سبتمبر", "amount": Decimal("500.00")}],
 }
 
 
@@ -101,8 +114,15 @@ class FakeService:
     def next_extract_no(self, contract_id):
         return {100: "A-H/CT-1001/EX-03", 101: "A-H/CT-1002/EX-02"}[contract_id]
 
-    def save_extract(self, data, extract_id=None, allow_approved=False):
+    def deduction_lines(self, extract_id):
+        return [dict(line) for line in DEDUCTIONS.get(extract_id, [])]
+
+    def deduction_types(self):
+        return [*DEDUCTION_TYPE_OPTIONS, "نظافة الموقع"]
+
+    def save_extract(self, data, extract_id=None, allow_approved=False, deductions=None):
         self.saved.append((dict(data), extract_id))
+        self.saved_deductions = deductions
         return extract_id or 501
 
     def delete_extract(self, extract_id, allow_approved=False):
@@ -289,7 +309,7 @@ def test_amounts_update_while_typing(screen):
     form = screen.card_form
     form.works_value.setText("114000")
     form.rates["withholding_tax_pct"].setCurrentIndex(form.rates["withholding_tax_pct"].findData("5"))
-    form.other_deductions.setText("1000")
+    form.set_deductions([{"deduction_type": "أخرى", "reason": "", "amount": Decimal("1000")}])
     assert form.before_tax.text() == "100,000.00"
     assert form.amounts["withholding_tax"].text() == "5,000.00"
     # 114,000 − 11,400 − 5,000 − 5,700 − 2,280 (the contract's 2%) − 1,000
@@ -568,3 +588,251 @@ def test_a_contract_missing_from_a_stale_list_does_not_show_another_one(screen):
     screen.set_contract(101)
     assert screen.contract_id == 101
     assert picker.currentIndex() == -1
+
+
+# --- خصومات أخرى بالتفصيل (نموذج 10، 2026-10-11) -------------------------------------------------
+
+LINES = [{"deduction_type": "غرامة تأخير", "reason": "تأخير 10 أيام", "amount": "2,500"},
+         {"deduction_type": "مواد مسحوبة", "reason": "حديد", "amount": "6000"},
+         {"deduction_type": "غرامة تأخير", "reason": "", "amount": "1000.5"}]
+
+
+def test_deduction_lines_add_up_and_split_by_type():
+    assert deductions_total(LINES) == Decimal("9500.50")
+    assert deductions_by_type(LINES) == [("مواد مسحوبة", Decimal("6000.00")), ("غرامة تأخير", Decimal("3500.50"))]
+    assert clean_deductions([{"deduction_type": "  أخرى ", "reason": None, "amount": "1,250"}]) == [
+        {"deduction_type": "أخرى", "reason": "", "amount": Decimal("1250.00")}]
+
+
+@pytest.mark.parametrize("line,message", [
+    ({"deduction_type": " ", "amount": "10"}, "نوع الخصم في السطر 1"),
+    ({"deduction_type": "أخرى", "amount": "0"}, "أكبر من صفر"),
+    ({"deduction_type": "x" * 81, "amount": "5"}, "أطول"),
+])
+def test_bad_deduction_lines_are_refused(line, message):
+    with pytest.raises(ExtractError, match=message):
+        clean_deductions([line])
+
+
+class _RecordingDb:
+    """Records the SQL; one transaction around the extract and its lines."""
+
+    def __init__(self):
+        self.calls = []
+        self.transactions = 0
+        self.used_types = []
+
+    def connection(self):
+        db = self
+
+        class _Tx:
+            def __enter__(self):
+                db.transactions += 1
+                db.calls.append(("BEGIN", None))
+
+            def __exit__(self, *exc):
+                db.calls.append(("END", None))
+                return False
+
+        class _Conn:
+            def transaction(self):
+                return _Tx()
+        return _Conn()
+
+    def fetch_one(self, sql, params=None):
+        self.calls.append((sql, params))
+        if sql.startswith("INSERT INTO contractor_extracts"):
+            return {"extract_id": 77}
+        return None  # no duplicate number, nothing approved
+
+    def fetch_all(self, sql, params=None):
+        self.calls.append((sql, params))
+        return [{"deduction_type": t} for t in self.used_types]
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+
+def _extract_data():
+    return {"extract_no": "A-H/CT-1001/EX-09", "extract_date": "2026-10-11", "contract_id": 100,
+            "works_value": "1000", "vat_pct": 14, "advance_payment_pct": 0, "withholding_tax_pct": 0,
+            "works_insurance_pct": 5, "social_insurance_pct": 0, "other_deductions": "999"}
+
+
+def test_saving_an_extract_with_lines_stores_their_total_and_replaces_them(monkeypatch):
+    from app.services import contracting_approval
+    monkeypatch.setattr(contracting_approval, "check_parents", lambda *a, **k: None)
+    db = _RecordingDb()
+    new_id = ContractorExtractService(db).save_extract(_extract_data(), deductions=LINES)
+    assert new_id == 77 and db.transactions == 1
+    statements = [(sql.split(" (")[0].split(" WHERE")[0], params) for sql, params in db.calls]
+    begin = statements.index(("BEGIN", None))
+    insert = next(i for i, (sql, _p) in enumerate(statements) if sql == "INSERT INTO contractor_extracts")
+    assert insert > begin
+    assert statements[insert][1][-1] == Decimal("9500.50")  # other_deductions = the lines, not «999»
+    lines = [p for sql, p in statements if sql == "INSERT INTO contractor_extract_deductions"]
+    assert [p[1:] for p in lines] == [
+        [1, "غرامة تأخير", "تأخير 10 أيام", Decimal("2500.00")],
+        [2, "مواد مسحوبة", "حديد", Decimal("6000.00")],
+        [3, "غرامة تأخير", "", Decimal("1000.50")],
+    ]
+    assert all(p[0] == 77 for p in lines)
+    delete = next(i for i, (sql, _p) in enumerate(statements) if sql == "DELETE FROM contractor_extract_deductions")
+    assert begin < delete < statements.index(("END", None))
+
+
+def test_updating_with_no_lines_clears_them_and_the_total(monkeypatch):
+    from app.services import contracting_approval
+    monkeypatch.setattr(contracting_approval, "check_parents", lambda *a, **k: None)
+    db = _RecordingDb()
+    ContractorExtractService(db).save_extract(_extract_data(), extract_id=5, deductions=[])
+    update = next(p for sql, p in db.calls if sql and sql.startswith("UPDATE contractor_extracts"))
+    assert update[-2] == Decimal("0.00") and update[-1] == 5
+    assert ("DELETE FROM contractor_extract_deductions WHERE extract_id = %s", [5]) in db.calls
+    assert not any(sql and sql.startswith("INSERT INTO contractor_extract_deductions") for sql, _p in db.calls)
+
+
+def test_a_bad_line_stops_the_save_before_the_database():
+    db = _RecordingDb()
+    with pytest.raises(ExtractError):
+        ContractorExtractService(db).save_extract(_extract_data(), deductions=[{"deduction_type": "", "amount": 5}])
+    assert db.calls == []
+
+
+def test_deduction_types_are_the_starter_list_then_the_typed_ones():
+    db = _RecordingDb()
+    db.used_types = ["أخرى", "نظافة الموقع"]
+    types = ContractorExtractService(db).deduction_types()
+    assert types[:7] == ["غرامة تأخير", "مواد مسحوبة", "مياه وكهرباء", "إصلاح أعمال معيبة", "معدات", "جزاءات", "أخرى"]
+    assert types[7:] == ["نظافة الموقع"]
+
+
+@pytest.fixture
+def no_popups(monkeypatch):
+    for name in ("information", "warning", "critical"):
+        monkeypatch.setattr(dialog_module.QMessageBox, name, lambda *a, **k: None)
+    monkeypatch.setattr(dialog_module.QMessageBox, "question", lambda *a, **k: dialog_module.QMessageBox.Yes)
+
+
+def _dialog(lines=(), editable=True):
+    return ExtractDeductionsDialog(list(lines), list(DEDUCTION_TYPE_OPTIONS), editable=editable,
+                                   extract_no="A-H/CT-1001/EX-02", contractor_name="أحمد للمقاولات",
+                                   works_value="200000")
+
+
+def test_the_dialog_adds_edits_and_deletes_lines(qt_app, no_popups):
+    dialog = _dialog()
+    dialog.type_combo.setEditText("غرامة تأخير")
+    dialog.reason_edit.setText("تأخير 10 أيام")
+    dialog.amount_edit.setText("2,500")
+    dialog.add_or_update()
+    dialog.type_combo.setEditText("نظافة الموقع")  # a new type
+    dialog.amount_edit.setText("500")
+    dialog.add_or_update()
+    assert dialog.table.rowCount() == 2 and dialog.total_label.text() == "3,000.00"
+    assert dialog.count_label.text() == "2 خصم · 1.5% من المستخلص"
+    assert dialog.type_combo.findText("نظافة الموقع") >= 0  # offered for the next line
+    assert dialog.amount_edit.text() == "" and dialog.type_combo.currentText() == ""
+
+    dialog.edit_line(1)
+    assert dialog.add_button.text() == "حفظ التعديل" and dialog.amount_edit.text() == "500.00"
+    dialog.amount_edit.setText("1000")
+    dialog.add_or_update()
+    assert dialog.total_label.text() == "3,500.00" and dialog.add_button.text() == "+ إضافة"
+
+    dialog.delete_line(0)
+    assert dialog.lines() == [{"deduction_type": "نظافة الموقع", "reason": "", "amount": Decimal("1000.00")}]
+    assert dialog.total_label.text() == "1,000.00"
+    assert dialog.table.item(0, 0).text() == "1"
+
+
+def test_the_dialog_refuses_a_line_without_a_type_or_amount(qt_app, no_popups):
+    dialog = _dialog()
+    dialog.amount_edit.setText("100")
+    dialog.add_or_update()
+    dialog.type_combo.setEditText("أخرى")
+    dialog.amount_edit.setText("0")
+    dialog.add_or_update()
+    assert dialog.lines() == []
+
+
+def test_the_dialog_splits_the_total_by_type(qt_app, no_popups):
+    dialog = _dialog(LINES)
+    labels = [w.text() for w in dialog.breakdown_host.findChildren(dialog_module.QLabel)]
+    assert labels[:2] == ["مواد مسحوبة", "6,000.00 · 63.2%"]
+    assert "غرامة تأخير" in labels
+    assert dialog.total_label.text() == "9,500.50"
+
+
+def test_a_read_only_dialog_only_shows(qt_app, no_popups):
+    dialog = _dialog(LINES, editable=False)
+    assert dialog.input_row.isHidden() and dialog.ok_button.isHidden()
+    assert dialog.table.isColumnHidden(dialog_module.COL_ACTIONS)
+    assert dialog.cancel_button.text() == "إغلاق"
+    dialog.delete_line(0)
+    assert len(dialog.lines()) == 3
+
+
+def test_an_extract_opens_with_its_deduction_lines(screen):
+    assert screen.current_id == 501
+    for form in screen.forms:
+        assert form.deduction_lines() == DEDUCTIONS[501]
+        assert form.amounts["other_deductions"].text() == "2,000.00"
+        assert form.deductions_button.text() == ("عرض الخصومات (2)" if form.wide else "عرض الخصومات")
+        assert form.deductions_button.isEnabled()
+
+
+def test_an_old_extract_with_no_lines_shows_its_total_as_one_line(screen, monkeypatch):
+    monkeypatch.setattr(screen.service, "deduction_lines", lambda _id: [])
+    screen.load_extract(501)
+    lines = screen.form.deduction_lines()
+    assert lines == [{"deduction_type": "أخرى", "reason": "رصيد سابق قبل التفصيل", "amount": Decimal("2000")}]
+    assert screen.form.amounts["other_deductions"].text() == "2,000.00"
+
+
+def _accept_with(monkeypatch, lines):
+    seen = {}
+
+    def fake_exec(dialog):
+        seen["editable"] = dialog.editable
+        seen["lines"] = dialog.lines()
+        dialog._lines = [dict(line) for line in lines]
+        return QDialog.Accepted
+    monkeypatch.setattr(ExtractDeductionsDialog, "exec", fake_exec)
+    return seen
+
+
+def test_the_dialog_sets_the_total_and_the_net_while_editing(draft_screen, monkeypatch):
+    screen = draft_screen
+    screen.edit_record()
+    form = screen.form
+    assert form.deductions_button.text() == "إضافة خصم (2)"
+    net_before = to_money(form.net_label.text())
+    seen = _accept_with(monkeypatch, [{"deduction_type": "معدات", "reason": "ونش", "amount": Decimal("5000")}])
+    form.deductions_button.click()
+    assert seen["editable"] and len(seen["lines"]) == 2
+    assert form.amounts["other_deductions"].text() == "5,000.00"
+    assert to_money(form.net_label.text()) == net_before - Decimal("3000")
+    screen.save_record()
+    data, record_id = screen.service.saved[-1]
+    assert record_id == 501 and data["other_deductions"] == Decimal("5000.00")
+    assert screen.service.saved_deductions == [{"deduction_type": "معدات", "reason": "ونش", "amount": Decimal("5000")}]
+
+
+def test_viewing_never_changes_the_lines(screen, monkeypatch):
+    seen = _accept_with(monkeypatch, [])
+    screen.form.deductions_button.click()
+    assert seen["editable"] is False
+    assert len(screen.form.deduction_lines()) == 2
+
+
+def test_a_new_extract_starts_with_no_deductions(screen):
+    screen.new_extract()
+    assert screen.form.deduction_lines() == []
+    assert screen.form.deductions_button.text() == "إضافة خصم" and screen.form.deductions_button.isEnabled()
+    screen.save_record()
+    assert screen.service.saved_deductions == []
+
+
+def to_money(text):
+    return Decimal(text.replace(",", ""))
