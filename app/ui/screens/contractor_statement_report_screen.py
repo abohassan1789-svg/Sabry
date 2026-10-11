@@ -13,6 +13,12 @@
   movement's identity and its three figures: what the extracts add to that type
   (صافي المستخلص / قيمة تأمين الأعمال / قيمة التأمينات الاجتماعية)، التحصيلات، الرصيد التراكمي.
 
+الخصومات الأخرى (user, 2026-10-11): the رصيد جاري tab keeps صافي المستخلص; a
+«إظهار تفاصيل الخصومات» button, with إجمالي الخصومات beside it, opens a line
+under each extract per deduction (النوع — السبب، المبلغ). A card beside the chart
+adds the period's deductions up per type. No balance changes: they are already
+inside صافي المستخلص.
+
 Every figure comes from ``contractor_statement_report_service``.
 """
 
@@ -28,6 +34,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QTabBar,
     QTableWidget,
     QVBoxLayout,
@@ -59,14 +66,17 @@ from app.ui.screens.contracting_report_base import (
     column_button,
     date_text,
     load_columns,
+    load_flag,
     report_settings,
     save_columns,
+    save_flag,
     table_item,
 )
 from app.ui.screens.contractor_contracts_screen import _money, _rate_text
 
 PERMISSION_BASE = "contracting.contractor_statement_report"
 SETTINGS_KEY = "contractor_statement_report/columns"
+SHOW_DEDUCTIONS_KEY = "contractor_statement_report/show_deductions"  # the details button, per user
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
 # The user's 19 columns in their order: (line key, header, kind).
@@ -136,11 +146,29 @@ CARD_FIELD = {key: field for key, _title, _accent, field, _figures in ACCOUNT_CA
 TAB_TITLES = {key: title for key, title, _accent, _field, _figures in ACCOUNT_CARDS}
 
 ROW_OPENING, ROW_EXTRACT, ROW_PAYMENT, ROW_TOTAL = "opening", "extract", "payment", "total"
+ROW_DEDUCTION = "deduction"  # one «خصومات أخرى» line under its extract (the details button)
 OPENING_BG = "#EEF4F4"
 PAYMENT_BG = "#F3FAF5"
 BALANCE_BG = "#FFF8EA"
 NET_BG = "#ECFDF3"
 PAID_COLOR = "#15803D"
+DEDUCTION_BG = "#FEF6F6"
+DEDUCTION_COLOR = "#B91C1C"
+DEDUCTION_CARD_ROWS = 5  # types listed on the card; more fold into «باقي الأنواع»
+
+
+def deduction_text(deduction: dict[str, Any]) -> str:
+    """«• غرامة تأخير — تأخير 5 أيام» (the reason only when there is one)."""
+    reason = str(deduction.get("reason") or "").strip()
+    return f"• {deduction.get('deduction_type') or ''}" + (f" — {reason}" if reason else "")
+
+
+def card_types(types: list[tuple[str, Any]], limit: int = DEDUCTION_CARD_ROWS) -> list[tuple[str, Any]]:
+    """The card's rows: the biggest types, the rest added up as «باقي الأنواع (n)»."""
+    if len(types) <= limit:
+        return list(types)
+    rest = types[limit - 1:]
+    return list(types[:limit - 1]) + [(f"باقي الأنواع ({len(rest)})", sum(amount for _kind, amount in rest))]
 
 
 def payment_text(line: dict[str, Any]) -> str:
@@ -270,6 +298,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         self.account = CURRENT_BALANCE  # the tab on show
         self.row_kinds: list[str] = []
         self.tab_columns = self._load_columns()
+        self.show_deductions = load_flag(self.settings, SHOW_DEDUCTIONS_KEY)
         super().__init__(service or ContractorStatementReportService(), parent)
 
     @staticmethod
@@ -290,7 +319,11 @@ class ContractorStatementReportScreen(ContractingReportBase):
     def _build_body(self, root: QVBoxLayout) -> None:
         root.addLayout(self._build_cards())
         self.chart = BalanceChart()
-        root.addWidget(self.chart)
+        chart_row = QHBoxLayout()
+        chart_row.setSpacing(8)
+        chart_row.addWidget(self.chart, 1)
+        chart_row.addWidget(self._build_deductions_card())
+        root.addLayout(chart_row)
         root.addLayout(self._build_toolbar())
         self.table = QTableWidget(0, len(COLUMNS))
         self.table.setObjectName("statement_table")
@@ -355,6 +388,71 @@ class ContractorStatementReportScreen(ContractingReportBase):
             layout.addWidget(card, 1)
         return layout
 
+    def _build_deductions_card(self) -> QFrame:
+        """الخصومات الأخرى في الفترة, per type (user, 2026-10-11)."""
+        card = QFrame()
+        card.setObjectName("deductions_card")
+        card.setFixedSize(300, 150)
+        card.setStyleSheet(
+            "QFrame#deductions_card { background:#FFFFFF; border:1px solid #E5EAF0; "
+            f"border-top:3px solid {DEDUCTION_COLOR}; border-radius:9px; }}"
+            "QLabel { background:transparent; border:none; }"
+        )
+        column = QVBoxLayout(card)
+        column.setContentsMargins(12, 6, 12, 7)
+        column.setSpacing(2)
+        head = QHBoxLayout()
+        caption = QLabel("الخصومات الأخرى")
+        caption.setStyleSheet(f"font-size:13px; font-weight:900; color:{DEDUCTION_COLOR};")
+        self.deductions_hint = QLabel("")
+        self.deductions_hint.setStyleSheet(f"font-size:11px; font-weight:700; color:{MUTED};")
+        head.addWidget(caption)
+        head.addStretch(1)
+        head.addWidget(self.deductions_hint)
+        column.addLayout(head)
+        self.deductions_grid = QGridLayout()
+        self.deductions_grid.setHorizontalSpacing(8)
+        self.deductions_grid.setVerticalSpacing(1)
+        column.addLayout(self.deductions_grid)
+        column.addStretch(1)
+        total = QHBoxLayout()
+        name = QLabel("الإجمالي")
+        name.setStyleSheet(f"font-size:12px; font-weight:900; color:{DEDUCTION_COLOR};")
+        self.deductions_card_total = QLabel("0.00")
+        self.deductions_card_total.setAlignment(Qt.AlignLeft | Qt.AlignAbsolute | Qt.AlignVCenter)
+        self.deductions_card_total.setStyleSheet(f"font-size:15px; font-weight:900; color:{DEDUCTION_COLOR};")
+        total.addWidget(name)
+        total.addStretch(1)
+        total.addWidget(self.deductions_card_total)
+        column.addLayout(total)
+        self.deduction_values: dict[str, QLabel] = {}
+        return card
+
+    def _fill_deductions_card(self, summary: dict[str, Any]) -> None:
+        while self.deductions_grid.count():
+            widget = self.deductions_grid.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.deduction_values = {}
+        rows = card_types(summary.get("types") or [])
+        if not rows:
+            empty = QLabel("مفيش خصومات في الفترة دي")
+            empty.setStyleSheet(f"font-size:12px; font-weight:700; color:{MUTED};")
+            self.deductions_grid.addWidget(empty, 0, 0, 1, 2)
+        for row, (kind, amount) in enumerate(rows):
+            name = QLabel(kind)
+            name.setStyleSheet(f"font-size:12px; font-weight:800; color:{TEXT};")
+            value = QLabel(_money(amount))
+            value.setAlignment(Qt.AlignLeft | Qt.AlignAbsolute | Qt.AlignVCenter)
+            value.setStyleSheet(f"font-size:12px; font-weight:900; color:{TEXT};")
+            self.deductions_grid.addWidget(name, row, 0)
+            self.deductions_grid.addWidget(value, row, 1)
+            self.deduction_values[kind] = value
+        self.deductions_card_total.setText(_money(summary.get("total") or 0))
+        count = summary.get("extracts_count") or 0
+        self.deductions_hint.setText(f"{count} مستخلصات" if count else "")
+
     def _build_toolbar(self) -> QHBoxLayout:
         layout = QHBoxLayout()
         layout.setSpacing(8)
@@ -381,6 +479,24 @@ class ContractorStatementReportScreen(ContractingReportBase):
         layout.addSpacing(12)
         layout.addWidget(self.columns_button)
         layout.addWidget(self.columns_count)
+        layout.addSpacing(12)
+        # الخصومات الأخرى تحت كل مستخلص, with their total beside the button (user, 2026-10-11).
+        self.deductions_toggle = QPushButton("إظهار تفاصيل الخصومات")
+        self.deductions_toggle.setCheckable(True)
+        self.deductions_toggle.setChecked(self.show_deductions)
+        self.deductions_toggle.setCursor(Qt.PointingHandCursor)
+        self.deductions_toggle.setMinimumHeight(34)
+        self.deductions_toggle.setStyleSheet(
+            f"QPushButton {{ background:#FFFFFF; color:{DEDUCTION_COLOR}; border:1.5px solid {DEDUCTION_COLOR}; "
+            "border-radius:8px; padding:5px 14px; font-size:13px; font-weight:900; }"
+            f"QPushButton:checked {{ background:{DEDUCTION_COLOR}; color:#FFFFFF; }}"
+        )
+        self.deductions_toggle.toggled.connect(self._on_deductions_toggled)
+        self.deductions_total = self._caption("")
+        self.deductions_total.setStyleSheet(f"font-size:13px; font-weight:900; color:{DEDUCTION_COLOR};")
+        layout.addWidget(self.deductions_toggle)
+        layout.addWidget(self.deductions_total)
+        self._update_deductions_button()
         layout.addStretch(1)
         self.count_label = self._caption("")
         layout.addWidget(self.count_label)
@@ -389,6 +505,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
     def _on_account_tab(self, index: int) -> None:
         self.account = EXTRACT_ACCOUNT_TYPES[index] if 0 <= index < len(EXTRACT_ACCOUNT_TYPES) else CURRENT_BALANCE
         self._update_count()
+        self._update_deductions_button()
         self._apply_columns()  # each tab shows its own columns
         self._fill_table()
 
@@ -400,6 +517,23 @@ class ContractorStatementReportScreen(ContractingReportBase):
         who = "كل المقاولين — " if self.filters()["contractor_id"] is None else ""
         self.count_label.setText(f"{who}{TAB_TITLES[self.account]}: {totals['extracts_count']} مستخلصات · "
                                  f"{totals['payments_count']} دفعات")
+
+    # -- الخصومات الأخرى -----------------------------------------------------------------
+
+    def _on_deductions_toggled(self, checked: bool) -> None:
+        self.show_deductions = checked
+        save_flag(self.settings, SHOW_DEDUCTIONS_KEY, checked)
+        self._update_deductions_button()
+        self._fill_table()
+
+    def _update_deductions_button(self) -> None:
+        """The details are the رصيد جاري tab's: the insurance tabs never hold the deductions."""
+        on_current = self.account == CURRENT_BALANCE
+        self.deductions_toggle.setVisible(on_current)
+        self.deductions_total.setVisible(on_current)
+        self.deductions_toggle.setText("إخفاء تفاصيل الخصومات" if self.show_deductions else "إظهار تفاصيل الخصومات")
+        total = (self.statement.get("deductions") or {}).get("total") or 0
+        self.deductions_total.setText(f"إجمالي الخصومات: {_money(total)}")
 
     # -- filters -----------------------------------------------------------------------
 
@@ -449,6 +583,8 @@ class ContractorStatementReportScreen(ContractingReportBase):
             f"{contracts['count']} عقود · نسبة {_rate_text(round(contracts['advance_pct'], 3))}%"
             + (f" · حتى {date_text(filters['date_to'])}" if filters["date_to"] else ""))
         self.card_hints["withholding"].setText(f"{withholding['extracts_count']} مستخلصات · للعرض فقط")
+        self._fill_deductions_card(self.statement.get("deductions") or {})
+        self._update_deductions_button()
         self._update_count()
         self.chart.set_statement(self.statement)
         self._fill_table()
@@ -472,8 +608,12 @@ class ContractorStatementReportScreen(ContractingReportBase):
         caption = (f"رصيد أول المدة — {TAB_TITLES[self.account]} قبل {date_text(date_from)}" if date_from
                    else f"رصيد أول المدة — {CARD_FIELD[self.account]} في {cards}")
         self._add_label_row(ROW_OPENING, caption, {"balance": statement["opening"]}, OPENING_BG)
+        details = self.show_deductions and self.account == CURRENT_BALANCE
         for line in statement["lines"]:
             self._add_line(line)
+            if details and line["kind"] == KIND_EXTRACT:
+                for deduction in line.get("deductions") or []:
+                    self._add_deduction_row(deduction)
         totals = statement["totals"]
         caption = (f"الإجمالي — {TAB_TITLES[self.account]} — {totals['extracts_count']} مستخلصات · "
                    f"{totals['payments_count']} دفعات")
@@ -504,6 +644,27 @@ class ContractorStatementReportScreen(ContractingReportBase):
             if key == "paid" and payment:
                 item.setForeground(QBrush(QColor(PAID_COLOR)))
             self.table.setItem(index, column, item)
+
+    def _add_deduction_row(self, deduction: dict[str, Any]) -> None:
+        """«• النوع — السبب» across the text columns; the amount under «خصومات أخرى» when it is
+        shown, else in parentheses under صافي المستخلص, else after the text."""
+        index = self._new_row(ROW_DEDUCTION, 26)
+        first, span = self._label_columns()
+        amount = _money(deduction.get("amount"))
+        if "other_deductions" in self.visible_columns:
+            target, shown = "other_deductions", amount
+        elif "net" in self.visible_columns:
+            target, shown = "net", f"({amount})"
+        else:
+            target, shown = None, ""
+        text = deduction_text(deduction) + ("" if target else f"  ({amount})")
+        for column, key in enumerate(COLUMN_KEYS):
+            item = table_item(text if column == first else (shown if key == target else ""))
+            item.setBackground(QBrush(QColor(DEDUCTION_BG)))
+            item.setForeground(QBrush(QColor(DEDUCTION_COLOR)))
+            self.table.setItem(index, column, item)
+        if span > 1:
+            self.table.setSpan(index, first, 1, span)
 
     def _add_label_row(self, kind: str, text: str, values: dict[str, Any], background: str) -> None:
         index = self._new_row(kind, 36)

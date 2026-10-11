@@ -433,3 +433,132 @@ def test_each_tab_remembers_its_own_choice(screen, settings):
     assert _visible(again.table) == ["date", "contractor_name", "extract_no", "account_type", "works_insurance",
                                      "paid", "balance"]
     again.close()
+
+
+# -- الخصومات الأخرى بالتفصيل (user, 2026-10-11) ---------------------------------------------
+
+from app.services.contractor_statement_report_service import (  # noqa: E402
+    deductions_summary,
+    extract_deductions,
+    extract_line,
+)
+from app.ui.screens.contractor_statement_report_screen import (  # noqa: E402
+    ROW_DEDUCTION,
+    SHOW_DEDUCTIONS_KEY,
+    card_types,
+    deduction_text,
+)
+
+LINES = [{"deduction_type": "غرامة تأخير", "reason": "تأخير 5 أيام", "amount": Decimal("600.00")},
+         {"deduction_type": "مياه وكهرباء", "reason": "", "amount": Decimal("400.00")}]
+DETAILED = [EXTRACTS[0], dict(EXTRACTS[1], deductions=LINES)]  # EX-02's 1,000 in two lines
+
+
+class DetailedService(FakeService):
+    def statement(self, **filters):
+        self.last_filters = filters
+        accounts = build_accounts(CARD, DETAILED, PAYMENTS, filters["date_from"], filters["date_to"])
+        return _with_accounts(accounts, contract_advance(CONTRACTS, DETAILED, filters["date_to"], PAYMENTS),
+                              withholding_total(0, DETAILED, filters["date_from"], filters["date_to"]))
+
+
+@pytest.fixture
+def detailed(qt_app, settings):
+    widget = ContractorStatementReportScreen(DetailedService(), settings=settings)
+    widget.resize(1700, 900)
+    yield widget
+    widget.close()
+
+
+def test_an_extract_line_carries_its_deductions():
+    assert extract_line(DETAILED[1])["deductions"] == LINES
+    assert extract_line(EXTRACTS[0])["deductions"] == []
+    # A total saved before the detail reads as one line.
+    assert extract_deductions(EXTRACTS[1]) == [
+        {"deduction_type": "أخرى", "reason": "رصيد سابق قبل التفصيل", "amount": Decimal("1000.00")}]
+
+
+def test_the_summary_adds_up_each_type_of_the_period():
+    lines = [extract_line(x) for x in DETAILED + [dict(EXTRACTS[1], extract_id=3, deductions=[LINES[0]])]]
+    summary = deductions_summary(lines)
+    assert summary["types"] == [("غرامة تأخير", Decimal("1200.00")), ("مياه وكهرباء", Decimal("400.00"))]
+    assert summary["total"] == Decimal("1600.00") and summary["extracts_count"] == 2
+
+
+def test_deductions_after_the_period_stay_out_of_the_summary():
+    accounts = build_accounts(CARD, DETAILED, [], date_to=datetime.date(2026, 3, 1))
+    assert _with_accounts(accounts, {}, {})["deductions"]["total"] == 0
+
+
+def test_the_card_folds_the_smallest_types():
+    types = [(f"نوع {i}", Decimal(100 - i)) for i in range(7)]
+    rows = card_types(types)
+    assert len(rows) == 5 and rows[-1] == ("باقي الأنواع (3)", Decimal("285"))
+    assert card_types(types[:3]) == types[:3]
+
+
+def test_deduction_text():
+    assert deduction_text(LINES[0]) == "• غرامة تأخير — تأخير 5 أيام"
+    assert deduction_text(LINES[1]) == "• مياه وكهرباء"
+
+
+def test_the_details_button_shows_the_total_and_starts_closed(detailed):
+    assert not detailed.deductions_toggle.isChecked() and detailed.deductions_toggle.isVisibleTo(detailed)
+    assert detailed.deductions_total.text() == "إجمالي الخصومات: 1,000.00"
+    assert ROW_DEDUCTION not in detailed.row_kinds
+    assert {k: v.text() for k, v in detailed.deduction_values.items()} == {
+        "غرامة تأخير": "600.00", "مياه وكهرباء": "400.00"}
+    assert detailed.deductions_card_total.text() == "1,000.00"
+
+
+def test_the_details_open_under_their_extract(detailed, settings):
+    detailed.deductions_toggle.setChecked(True)
+    assert detailed.deductions_toggle.text() == "إخفاء تفاصيل الخصومات"
+    kinds = detailed.row_kinds
+    at = kinds.index(ROW_DEDUCTION)
+    assert kinds[at - 1] == ROW_EXTRACT and kinds.count(ROW_DEDUCTION) == 2
+    assert _cell(detailed, at - 1, "extract_no") == "A-H/CT-1001/EX-02"
+    assert _cell(detailed, at, "date") == "• غرامة تأخير — تأخير 5 أيام"
+    assert _cell(detailed, at, "net") == "(600.00)"     # «خصومات أخرى» is hidden: under the net
+    assert _cell(detailed, at + 1, "net") == "(400.00)"
+    assert _cell(detailed, at, "balance") == ""          # no balance moves
+    assert _cell(detailed, len(kinds) - 1, "balance") == "479,400.00"
+    again = ContractorStatementReportScreen(DetailedService(), settings=settings)  # remembered
+    assert again.deductions_toggle.isChecked() and ROW_DEDUCTION in again.row_kinds
+    again.close()
+
+
+def test_the_amount_goes_under_other_deductions_when_it_is_shown(detailed):
+    detailed.deductions_toggle.setChecked(True)
+    detailed.set_visible_columns(list(detailed.visible_columns) + ["other_deductions"])
+    at = detailed.row_kinds.index(ROW_DEDUCTION)
+    assert _cell(detailed, at, "other_deductions") == "600.00" and _cell(detailed, at, "net") == ""
+
+
+def test_the_insurance_tabs_have_no_deduction_details(detailed):
+    detailed.deductions_toggle.setChecked(True)
+    detailed.account_tabs.setCurrentIndex(1)
+    assert not detailed.deductions_toggle.isVisibleTo(detailed)
+    assert ROW_DEDUCTION not in detailed.row_kinds
+    detailed.account_tabs.setCurrentIndex(0)
+    assert ROW_DEDUCTION in detailed.row_kinds
+
+
+class _DeductionsDb(_Db):
+    def fetch_all(self, sql, params=None):
+        self.queries.append((sql, params))
+        if "FROM contractor_extracts x" in sql:
+            return [dict(DETAILED[1], deductions=None)]
+        if "contractor_extract_deductions" in sql:
+            return [dict(line, extract_id=2) for line in LINES]
+        return []
+
+
+def test_service_reads_each_extracts_deduction_lines():
+    from app.services.contractor_statement_report_service import ContractorStatementReportService
+
+    db = _DeductionsDb()
+    statement = ContractorStatementReportService(db).statement(contractor_id=1)
+    sql, params = next((q, p) for q, p in db.queries if "contractor_extract_deductions" in q)
+    assert "ANY(%s)" in sql and params == [[2]]
+    assert statement["deductions"]["types"] == [("غرامة تأخير", Decimal("600.00")), ("مياه وكهرباء", Decimal("400.00"))]

@@ -41,6 +41,11 @@ the contractors with a contract there), then all their movements by date.
 any balance. It starts on the card's «ضرائب الخصم والإضافة» and adds the extracts'
 ضريبة الخصم (card 36,000 + extracts 4,000 = 40,000). Extracts before «من» go into
 its رصيد أول المدة, those after «إلى» are left out.
+
+الخصومات الأخرى بالتفصيل (user, 2026-10-11): each extract line carries its
+``deductions`` (نوع الخصم، السبب، المبلغ; their sum is the extract's
+«خصومات أخرى», already inside صافي المستخلص, so no balance changes).
+``statement["deductions"]`` adds the period's extracts up per type for the card.
 """
 
 from __future__ import annotations
@@ -58,7 +63,12 @@ from app.services.contractor_payment_service import (
     WORKS_INSURANCE,
 )
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
-from app.services.contractor_extract_service import extract_amounts
+from app.services.contractor_extract_service import (
+    LEGACY_DEDUCTION_REASON,
+    LEGACY_DEDUCTION_TYPE,
+    deductions_by_type,
+    extract_amounts,
+)
 
 KIND_EXTRACT, KIND_PAYMENT = "extract", "payment"
 
@@ -78,10 +88,28 @@ def _day(value: Any) -> datetime.date | None:
     return value if isinstance(value, datetime.date) else None
 
 
+def extract_deductions(extract: dict[str, Any]) -> list[dict[str, Any]]:
+    """The extract's «خصومات أخرى» lines; a total saved before the detail reads as one line."""
+    lines = [dict(line) for line in extract.get("deductions") or []]
+    other = _money(to_decimal(extract.get("other_deductions")))
+    if not lines and other > 0:
+        lines = [{"deduction_type": LEGACY_DEDUCTION_TYPE, "reason": LEGACY_DEDUCTION_REASON, "amount": other}]
+    return lines
+
+
+def deductions_summary(lines: list[dict[str, Any]]) -> dict[str, Any]:
+    """The period's «خصومات أخرى» per type (biggest first), from a statement's lines."""
+    extracts = [line for line in lines if line["kind"] == KIND_EXTRACT and line.get("deductions")]
+    every = [deduction for line in extracts for deduction in line["deductions"]]
+    types = deductions_by_type(every)
+    return {"types": types, "total": sum((amount for _kind, amount in types), ZERO),
+            "extracts_count": len(extracts)}
+
+
 def extract_line(extract: dict[str, Any]) -> dict[str, Any]:
     amounts = extract_amounts(extract)
     line = {**extract, "kind": KIND_EXTRACT, "date": _day(extract.get("extract_date")), "paid": ZERO,
-            "account_type": ALL_ACCOUNTS}
+            "account_type": ALL_ACCOUNTS, "deductions": extract_deductions(extract)}
     line.update({key: to_decimal(extract.get(key)) for key in RATE_KEYS})
     line.update({key: amounts[key] for key in EXTRACT_AMOUNT_KEYS})
     return line
@@ -212,7 +240,7 @@ def _with_accounts(accounts: dict[str, dict[str, Any]], contracts: dict[str, Any
     """The رصيد جاري statement at the top (``opening``/``lines``/``totals``), plus every type's."""
     statement = dict(accounts[CURRENT_BALANCE])
     statement.update(accounts=accounts, timeline=account_timeline(accounts), contracts=contracts,
-                     withholding=withholding)
+                     withholding=withholding, deductions=deductions_summary(accounts[CURRENT_BALANCE]["lines"]))
     return statement
 
 
@@ -273,6 +301,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
             + " AND ".join(where),
             params,
         )
+        self._attach_deductions(extracts)
         payment_where = [w.replace("k.contractor_id", "y.contractor_id").replace("k.project_id", "y.project_id")
                          for w in where]
         payments = self._db.fetch_all(
@@ -289,3 +318,17 @@ class ContractorStatementReportService(ContractorContractsReportService):
         accounts = build_accounts(row, extracts, payments, date_from, date_to)
         return _with_accounts(accounts, contract_advance(contracts, extracts, date_to, payments),
                               withholding_total(row.get("withholding_tax_amount"), extracts, date_from, date_to))
+
+    def _attach_deductions(self, extracts: list[dict[str, Any]]) -> None:
+        """Each extract's «خصومات أخرى» lines, in their order, as ``deductions``."""
+        ids = [x["extract_id"] for x in extracts]
+        rows = self._db.fetch_all(
+            "SELECT extract_id, deduction_type, reason, amount FROM contractor_extract_deductions "
+            "WHERE extract_id = ANY(%s) ORDER BY extract_id, line_no, deduction_id",
+            [ids],
+        ) if ids else []
+        by_extract: dict[Any, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_extract.setdefault(row["extract_id"], []).append(dict(row))
+        for extract in extracts:
+            extract["deductions"] = by_extract.get(extract["extract_id"], [])
