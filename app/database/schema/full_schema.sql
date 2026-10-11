@@ -3815,3 +3815,10 @@ SELECT x.extract_id, 1, 'أخرى', 'رصيد سابق قبل التفصيل', x
   FROM public.contractor_extracts x
  WHERE x.other_deductions > 0
    AND NOT EXISTS (SELECT 1 FROM public.contractor_extract_deductions d WHERE d.extract_id = x.extract_id);
+
+
+-- 2026-10-11 (user): the company's logo and السجل الضريبي are entered in «الشركات والمشاريع»
+-- («بيانات الشركة» is hidden). The logo lives inside the database (bytes + mime), never a path.
+ALTER TABLE public.client_companies ADD COLUMN IF NOT EXISTS tax_registration_no character varying(50);
+ALTER TABLE public.client_companies ADD COLUMN IF NOT EXISTS logo bytea;
+ALTER TABLE public.client_companies ADD COLUMN IF NOT EXISTS logo_mime character varying(64);

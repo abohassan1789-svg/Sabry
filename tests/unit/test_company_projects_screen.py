@@ -285,3 +285,131 @@ def test_a_refused_delete_does_not_announce_a_change(screen, data_changes):
     screen.select_company(1)  # still has projects
     screen.delete_record()
     assert data_changes == []
+
+
+# --- اللوجو والسجل الضريبي (user request 2026-10-11) -------------------------------------------
+
+def _png_bytes(color="#137A38"):
+    from PySide6.QtCore import QBuffer, QByteArray, QIODevice
+    from PySide6.QtGui import QColor, QImage
+    image = QImage(8, 8, QImage.Format_RGB32)
+    image.fill(QColor(color))
+    data = QByteArray()
+    buffer = QBuffer(data)
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    return bytes(data)
+
+
+@pytest.fixture
+def logo_screen(screen, monkeypatch):
+    """Company 2 has a saved logo and tax number."""
+    saved_logo = _png_bytes()
+    real = screen.service.get_company
+
+    def get_company(company_id):
+        record = real(company_id)
+        if record and record["company_id"] == 2:
+            record.update(tax_registration_no="100-200-300", logo=memoryview(saved_logo), logo_mime="image/png")
+        return record
+    monkeypatch.setattr(screen.service, "get_company", get_company)
+    screen.saved_logo = saved_logo
+    return screen
+
+
+def test_a_company_shows_its_tax_number_and_logo(logo_screen):
+    screen = logo_screen
+    screen.select_company(2)
+    assert screen.company_tax.text() == "100-200-300" and screen.company_tax.isReadOnly()
+    assert not screen.logo_preview.pixmap().isNull()
+    assert not screen.choose_logo_button.isEnabled() and not screen.remove_logo_button.isEnabled()
+    screen.select_company(1)
+    assert screen.company_tax.text() == "" and screen.logo_preview.text() == "لا يوجد لوجو"
+
+
+def test_choosing_a_logo_and_tax_number_are_saved_with_the_company(screen, monkeypatch, tmp_path):
+    picture = tmp_path / "logo.png"
+    picture.write_bytes(_png_bytes())
+    monkeypatch.setattr(screen_module.QFileDialog, "getOpenFileName", lambda *a, **k: (str(picture), ""))
+    screen.new_company()
+    assert screen.choose_logo_button.isEnabled() and not screen.remove_logo_button.isEnabled()
+    screen.company_name.setText("شركة جديدة")
+    screen.company_tax.setText("555-666")
+    screen.choose_logo()
+    assert screen.remove_logo_button.isEnabled() and not screen.logo_preview.pixmap().isNull()
+    screen.save_record()
+    kind, data, record_id = screen.service.saved[-1]
+    assert kind == "company" and record_id is None
+    assert data["tax_registration_no"] == "555-666"
+    assert data["logo"] == picture.read_bytes() and data["logo_mime"] == "image/png"
+
+
+def test_a_file_that_is_not_an_image_is_refused(screen, monkeypatch, tmp_path):
+    bad = tmp_path / "logo.png"
+    bad.write_bytes(b"not a picture")
+    monkeypatch.setattr(screen_module.QFileDialog, "getOpenFileName", lambda *a, **k: (str(bad), ""))
+    screen.new_company()
+    screen.choose_logo()
+    assert screen._logo is None
+
+
+def test_removing_the_logo_then_cancel_brings_it_back(logo_screen):
+    screen = logo_screen
+    screen.select_company(2)
+    screen.edit_record()
+    screen.remove_logo()
+    assert screen._logo is None and screen.logo_preview.text() == "لا يوجد لوجو"
+    screen.cancel_edit()
+    assert screen._logo == screen.saved_logo
+
+
+def test_removing_the_logo_saves_none(logo_screen):
+    screen = logo_screen
+    screen.select_company(2)
+    screen.edit_record()
+    screen.remove_logo()
+    screen.save_record()
+    _kind, data, record_id = screen.service.saved[-1]
+    assert record_id == 2 and data["logo"] is None and data["logo_mime"] is None
+
+
+class _RecordingDb:
+    def __init__(self):
+        self.calls = []
+
+    def fetch_one(self, sql, params=None):
+        self.calls.append((sql, params))
+        return {"company_id": 7} if sql.startswith("INSERT") else None
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+
+def test_the_service_writes_the_logo_only_when_given():
+    from app.services.company_project_service import CompanyProjectService
+    db = _RecordingDb()
+    service = CompanyProjectService(db)
+    base = {"company_code": "A-H/CO-1009", "company_name": "س", "address": "", "tax_registration_no": " 123 "}
+    assert service.save_company(dict(base, logo=b"img", logo_mime="image/png")) == 7
+    sql, params = db.calls[-1]
+    assert "logo, logo_mime" in sql and params == ["A-H/CO-1009", "س", None, "123", b"img", "image/png"]
+    service.save_company(base, company_id=3)  # no «logo» key: the saved one stays
+    sql, params = db.calls[-1]
+    assert "logo" not in sql and params == ["A-H/CO-1009", "س", None, "123", 3]
+    service.save_company(dict(base, logo=None, logo_mime="image/png"), company_id=3)
+    sql, params = db.calls[-1]
+    assert "logo = %s" in sql and params[-3:] == [None, None, 3]
+
+
+def test_a_too_long_tax_number_is_refused():
+    from app.services.company_project_service import CompanyProjectService
+    with pytest.raises(CompanyProjectError, match="السجل الضريبي"):
+        CompanyProjectService(_RecordingDb()).save_company(
+            {"company_code": "A-H/CO-1009", "company_name": "س", "tax_registration_no": "9" * 51})
+
+
+def test_the_company_info_screen_is_hidden():
+    from app.services.permission_registry import HIDDEN_TARGET_CODES, MATRIX_TARGET_CODES
+    from app.ui.main_window import HIDDEN_NAV_KEYS
+    assert "company_info" in HIDDEN_NAV_KEYS and "company_info" in HIDDEN_TARGET_CODES
+    assert "company_info" not in MATRIX_TARGET_CODES

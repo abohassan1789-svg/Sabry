@@ -20,7 +20,8 @@ CONTRACTING_REPORTS = {"contractors_dashboard", "contractor_contracts_report",
                        "contractor_extracts_report", "contractor_advance_report",
                        "contractor_statement_report", "contractor_withholding_report"}
 SECURITY_SCREENS = {"users", "roles", "user_permissions"}
-COMPANY_INFO_SCREENS = {"company_info"}
+# بيانات الشركة was hidden on 2026-10-11 (its logo / السجل الضريبي moved to الشركات والمشاريع).
+HIDDEN_CONTRACTING_SCREENS = {"company_info"}
 
 
 def test_permission_code_format():
@@ -30,8 +31,9 @@ def test_permission_code_format():
 def test_matrix_shows_only_contracting_and_security_targets():
     """User request 2026-10-02: the matrix is the contracting work + security only."""
     shown = {t["target_code"] for t in collect_targets()}
-    assert shown == CONTRACTING_SCREENS | CONTRACTING_REPORTS | SECURITY_SCREENS | COMPANY_INFO_SCREENS
+    assert shown == CONTRACTING_SCREENS | CONTRACTING_REPORTS | SECURITY_SCREENS
     assert shown == set(MATRIX_TARGET_CODES)
+    assert not shown & HIDDEN_CONTRACTING_SCREENS
 
 
 def test_contracting_screens_carry_approve_and_unapprove():
@@ -56,9 +58,6 @@ def test_each_target_gets_only_its_own_actions():
         assert by_code[code]["permission_type"] == "report"
     for code in SECURITY_SCREENS:
         assert tuple(by_code[code]["actions"]) == SECURITY_SCREEN_ACTIONS
-    for code in COMPANY_INFO_SCREENS:
-        assert tuple(by_code[code]["actions"]) == COMPANY_INFO_ACTIONS
-        assert by_code[code]["permission_type"] == "screen"
     assert CONTRACTING_SCREEN_ACTIONS == ("view", "create", "edit", "save", "delete",
                                           "approve", "unapprove")
     assert CONTRACTING_REPORT_ACTIONS == ("view", "filter", "print", "export")

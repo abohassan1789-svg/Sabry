@@ -17,6 +17,10 @@ styles copy that base so it looks like every other screen.
 «اعتماد» / «إلغاء الاعتماد» (``ApprovalControls``) act on the one in the drawer.
 Drafts are marked on the branches; only approved ones reach the other screens.
 An approved company or project is still edited; only an admin deletes one.
+
+2026-10-11: a company also takes رقم السجل الضريبي and its logo here (the
+«بيانات الشركة» screen is hidden). «اختيار صورة…» / «إزالة» work while editing;
+the logo is saved with the company, and «إلغاء» brings the saved one back.
 """
 
 from __future__ import annotations
@@ -25,9 +29,10 @@ import datetime
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
@@ -45,7 +50,8 @@ from PySide6.QtWidgets import (
 
 from app.security.session_context import SESSION
 from app.services import contracting_approval as approval
-from app.services.company_project_service import CompanyProjectError, CompanyProjectService
+from app.services.company_info_service import LOGO_FILE_FILTER, CompanyInfoError, read_logo_file
+from app.services.company_project_service import TAX_MAX, CompanyProjectError, CompanyProjectService
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.screens.approval_controls import ApprovalControls, status_chip
 from app.ui.common.live_lists import notify_data_changed
@@ -54,6 +60,7 @@ PERMISSION_BASE = "contracting.company_projects"
 BLUE = "#0369A1"
 BRANCH_LINE = "#94A3B8"
 COLUMNS = 3
+LOGO_SIZE = 110
 
 _EDITOR_QSS = (
     f"QLineEdit {{ background:#FFFFFF; border:1px solid {GREEN}; border-radius:7px; "
@@ -66,6 +73,13 @@ _COMBO_QSS = (
     f"padding:6px 10px; font-size:14px; font-weight:900; color:{TEXT}; }}"
     "QComboBox:disabled { background:#F8FAFC; color:#64748B; }"
 )
+
+
+def _pixmap(data: bytes | None) -> QPixmap | None:
+    if not data:
+        return None
+    pixmap = QPixmap()
+    return pixmap if pixmap.loadFromData(data) else None
 
 
 def _short_project_code(code: str) -> str:
@@ -85,6 +99,8 @@ class CompanyProjectsScreen(QWidget):
         self._suggested_code = ""
         self._buttons: dict[tuple[str, Any], QPushButton] = {}
         self._tree: list[dict[str, Any]] = []
+        self._logo: bytes | None = None        # the company's logo as it stands in the drawer
+        self._logo_mime: str | None = None
 
         self._perm_create = SESSION.can(f"{PERMISSION_BASE}.create")
         self._perm_edit = SESSION.can(f"{PERMISSION_BASE}.edit")
@@ -324,14 +340,50 @@ class CompanyProjectsScreen(QWidget):
         self.company_code = self._line_edit("كود الشركة", ltr=True)
         self.company_name = self._line_edit("اسم الشركة")
         self.company_address = self._line_edit("العنوان")
+        self.company_tax = self._line_edit("رقم السجل الضريبي", ltr=True)
+        self.company_tax.setMaxLength(TAX_MAX)
         self._field(form, "كود الشركة", self.company_code, "يُكتب تلقائيًا · قابل للتعديل")
         self._field(form, "اسم الشركة", self.company_name)
         self._field(form, "العنوان", self.company_address)
+        self._field(form, "رقم السجل الضريبي", self.company_tax)
+        self._field(form, "اللوجو", self._build_logo_box())
         self.company_projects_label = QLabel("")
         self.company_projects_label.setStyleSheet(f"font-size:13px; font-weight:900; color:{BLUE}; padding-top:6px;")
         form.addWidget(self.company_projects_label)
         form.addStretch(1)
         return page
+
+    def _build_logo_box(self) -> QWidget:
+        box = QWidget()
+        row = QHBoxLayout(box)
+        row.setContentsMargins(0, 2, 0, 0)
+        row.setSpacing(12)
+        self.logo_preview = QLabel()
+        self.logo_preview.setFixedSize(LOGO_SIZE, LOGO_SIZE)
+        self.logo_preview.setAlignment(Qt.AlignCenter)
+        self.logo_preview.setStyleSheet(
+            "QLabel { background:#FAF9F6; border:2px dashed #C9C6BC; border-radius:10px; "
+            "color:#94A3B8; font-size:12px; font-weight:800; }"
+        )
+        row.addWidget(self.logo_preview, 0)
+        buttons = QVBoxLayout()
+        buttons.setSpacing(8)
+        self.choose_logo_button = QPushButton("اختيار صورة…")
+        self.choose_logo_button.setStyleSheet(_button_style("#0E7490", "#155E75"))
+        self.remove_logo_button = QPushButton("إزالة اللوجو")
+        self.remove_logo_button.setStyleSheet(_button_style("#DC2626", "#B91C1C"))
+        for button in (self.choose_logo_button, self.remove_logo_button):
+            button.setFixedSize(140, 36)
+            buttons.addWidget(button)
+        hint = QLabel("PNG أو JPG لحد 5 ميجا")
+        hint.setStyleSheet("font-size:11px; font-weight:700; color:#64748B;")
+        buttons.addWidget(hint)
+        buttons.addStretch(1)
+        row.addLayout(buttons, 0)
+        row.addStretch(1)
+        self.choose_logo_button.clicked.connect(self.choose_logo)
+        self.remove_logo_button.clicked.connect(self.remove_logo)
+        return box
 
     def _build_project_form(self) -> QWidget:
         page = QWidget()
@@ -534,6 +586,8 @@ class CompanyProjectsScreen(QWidget):
         self.company_code.setText(str(record.get("company_code") or ""))
         self.company_name.setText(str(record.get("company_name") or ""))
         self.company_address.setText(str(record.get("address") or ""))
+        self.company_tax.setText(str(record.get("tax_registration_no") or ""))
+        self._set_logo(record.get("logo"), record.get("logo_mime"))
         count = int(record.get("project_count") or 0)
         self.company_projects_label.setText(f"📁 عدد المشاريع: {count}")
 
@@ -590,8 +644,9 @@ class CompanyProjectsScreen(QWidget):
         self.stack.setCurrentIndex(1)
         self.drawer_title.setText("شركة جديدة")
         self.breadcrumb.setText("")
-        for editor in (self.company_code, self.company_name, self.company_address):
+        for editor in (self.company_code, self.company_name, self.company_address, self.company_tax):
             editor.clear()
+        self._set_logo(None, None)
         self.company_projects_label.setText("")
         try:
             self.company_code.setText(self.service.next_company_code())
@@ -651,7 +706,8 @@ class CompanyProjectsScreen(QWidget):
             if self.kind == "company":
                 saved = self.service.save_company(
                     {"company_code": self.company_code.text(), "company_name": self.company_name.text(),
-                     "address": self.company_address.text()},
+                     "address": self.company_address.text(), "tax_registration_no": self.company_tax.text(),
+                     "logo": self._logo, "logo_mime": self._logo_mime},
                     record_id,
                 )
             else:
@@ -706,6 +762,50 @@ class CompanyProjectsScreen(QWidget):
         self.refresh_tree()
         notify_data_changed(self)
 
+    # -- اللوجو ------------------------------------------------------------------------
+
+    def _set_logo(self, data: Any, mime: Any) -> None:
+        self._logo = bytes(data) if data else None  # psycopg hands bytea back as memoryview
+        self._logo_mime = str(mime) if self._logo and mime else None
+        self._render_logo()
+        self._update_logo_buttons()
+
+    def _render_logo(self) -> None:
+        pixmap = _pixmap(self._logo)
+        if pixmap is None:
+            self.logo_preview.setPixmap(QPixmap())
+            self.logo_preview.setText("تعذّر عرض الصورة" if self._logo else "لا يوجد لوجو")
+        else:
+            self.logo_preview.setText("")
+            size = LOGO_SIZE - 12
+            self.logo_preview.setPixmap(pixmap.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+    def _update_logo_buttons(self) -> None:
+        editing = self.mode in {"new", "edit"} and self.kind == "company"
+        self.choose_logo_button.setEnabled(editing)
+        self.remove_logo_button.setEnabled(editing and bool(self._logo))
+
+    def choose_logo(self) -> None:
+        if self.mode not in {"new", "edit"} or self.kind != "company":
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "اختيار لوجو الشركة", "", LOGO_FILE_FILTER)
+        if not path:
+            return
+        try:
+            raw, mime = read_logo_file(path)
+        except CompanyInfoError as exc:
+            QMessageBox.warning(self, "لا يمكن استخدام الصورة", str(exc))
+            return
+        if _pixmap(raw) is None:
+            QMessageBox.warning(self, "صورة غير صالحة", "تعذّر قراءة الصورة المختارة.")
+            return
+        self._set_logo(raw, mime)
+
+    def remove_logo(self) -> None:
+        if self.mode not in {"new", "edit"} or not self._logo:
+            return
+        self._set_logo(None, None)
+
     # -- اعتماد / إلغاء الاعتماد ----------------------------------------------------
 
     def _status(self) -> Any:
@@ -743,9 +843,10 @@ class CompanyProjectsScreen(QWidget):
     def set_mode(self, mode: str) -> None:
         self.mode = mode
         editing = mode in {"new", "edit"}
-        for editor in (self.company_code, self.company_name, self.company_address,
+        for editor in (self.company_code, self.company_name, self.company_address, self.company_tax,
                        self.project_code, self.project_name, self.project_address):
             editor.setReadOnly(not editing)
+        self._update_logo_buttons()
         self.project_company.setEnabled(editing)
         has_record = self.current_id is not None
         status = self._status()

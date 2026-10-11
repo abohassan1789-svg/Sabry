@@ -12,6 +12,10 @@ indexes underneath.
 Both have a ``status`` (مسودة / معتمد, ``contracting_approval``). This screen
 shows drafts too; every other screen and report sees approved ones only. An
 approved company or project stays editable; only an admin deletes one.
+
+A company also carries رقم السجل الضريبي and its logo (2026-10-11, replacing
+the hidden «بيانات الشركة» screen). The logo is stored in the database
+(``logo`` bytes + ``logo_mime``); the tree never loads it, only ``get_company``.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from app.services import contracting_approval as approval
 COMPANY_PREFIX = "A-H/CO-"
 FIRST_COMPANY_NUMBER = 1001
 PROJECT_SEPARATOR = "/PR-"
+TAX_MAX = 50
 
 _COMPANY_PATTERN = re.compile(r"^\s*A-H/CO-(\d+)\s*$", re.IGNORECASE)
 
@@ -77,8 +82,8 @@ class CompanyProjectService:
         those projects) — so a search never hides the branch a hit sits on.
         """
         companies = self._db.fetch_all(
-            "SELECT company_id, company_code, company_name, address, status FROM client_companies "
-            "ORDER BY company_code"
+            "SELECT company_id, company_code, company_name, address, tax_registration_no, status "
+            "FROM client_companies ORDER BY company_code"
         )
         projects = self._db.fetch_all(
             "SELECT project_id, company_id, project_code, project_name, address, status FROM company_projects "
@@ -97,7 +102,7 @@ class CompanyProjectService:
         for company in companies:
             company = dict(company)
             kids = by_company.get(company["company_id"], [])
-            if needle and not hit(company, ("company_code", "company_name", "address")):
+            if needle and not hit(company, ("company_code", "company_name", "address", "tax_registration_no")):
                 kids = [p for p in kids if hit(p, ("project_code", "project_name", "address"))]
                 if not kids:
                     continue
@@ -107,7 +112,8 @@ class CompanyProjectService:
 
     def get_company(self, company_id: Any) -> dict[str, Any] | None:
         return self._db.fetch_one(
-            "SELECT c.company_id, c.company_code, c.company_name, c.address, c.status, "
+            "SELECT c.company_id, c.company_code, c.company_name, c.address, c.tax_registration_no, "
+            "c.logo, c.logo_mime, c.status, "
             "(SELECT count(*) FROM company_projects p WHERE p.company_id = c.company_id) AS project_count "
             "FROM client_companies c WHERE c.company_id = %s",
             [company_id],
@@ -155,24 +161,33 @@ class CompanyProjectService:
     # -- writing -----------------------------------------------------------
 
     def save_company(self, data: dict[str, Any], company_id: Any = None) -> int:
+        """Insert or update a company. A ``logo`` key (bytes or None, with ``logo_mime``)
+        sets or clears the logo; without the key the saved logo is left alone."""
         code, name, address = _clean(data.get("company_code")), _clean(data.get("company_name")), _clean(data.get("address"))
+        tax = _clean(data.get("tax_registration_no"))
         if not code:
             raise CompanyProjectError("كود الشركة مطلوب.")
         if not name:
             raise CompanyProjectError("اسم الشركة مطلوب.")
+        if len(tax) > TAX_MAX:
+            raise CompanyProjectError(f"رقم السجل الضريبي أطول من {TAX_MAX} حرف.")
         if self._code_taken("client_companies", "company_id", "company_code", code, company_id):
             raise CompanyProjectError(f"الكود «{code}» مستخدم لشركة تانية. غيّر الكود قبل الحفظ.")
-        params = [code, name, address or None]
+        columns = ["company_code", "company_name", "address", "tax_registration_no"]
+        params: list[Any] = [code, name, address or None, tax or None]
+        if "logo" in data:
+            logo = data.get("logo") or None
+            columns += ["logo", "logo_mime"]
+            params += [logo, (data.get("logo_mime") or None) if logo else None]
         if company_id is None:
             row = self._db.fetch_one(
-                "INSERT INTO client_companies (company_code, company_name, address) "
-                "VALUES (%s, %s, %s) RETURNING company_id",
+                f"INSERT INTO client_companies ({', '.join(columns)}) "
+                f"VALUES ({', '.join(['%s'] * len(columns))}) RETURNING company_id",
                 params,
             )
             return int(row["company_id"])
         self._db.execute(
-            "UPDATE client_companies SET company_code = %s, company_name = %s, address = %s "
-            "WHERE company_id = %s",
+            f"UPDATE client_companies SET {', '.join(f'{c} = %s' for c in columns)} WHERE company_id = %s",
             params + [company_id],
         )
         return int(company_id)

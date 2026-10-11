@@ -306,6 +306,9 @@ HIDDEN_TARGET_CODES: frozenset[str] = frozenset({
     "tawrid_tractor_statement",     # كشف حساب الجرارات
     "tawrid_comprehensive_report",  # تقرير شامل
     "tawrid_treasury_statement",    # كشف حساب الخزينة
+    # بيانات الشركة — hidden per user request (2026-10-11); the logo and السجل الضريبي
+    # moved to الشركات والمشاريع. Mirror of main_window.HIDDEN_NAV_KEYS.
+    "company_info",                 # بيانات الشركة
 })
 
 
@@ -332,7 +335,7 @@ TARGET_ACTIONS: dict[str, tuple[str, ...]] = {
     "contractor_contracts": CONTRACTING_SCREEN_ACTIONS,
     "contractor_extracts": CONTRACTING_SCREEN_ACTIONS,
     "contractor_payments": CONTRACTING_SCREEN_ACTIONS,
-    "company_info": COMPANY_INFO_ACTIONS,
+    # "company_info" (بيانات الشركة) left the matrix when the screen was hidden (2026-10-11).
     # المقاولات — داشبورد وتقارير.
     "contractors_dashboard": CONTRACTING_REPORT_ACTIONS,
     "contractor_contracts_report": CONTRACTING_REPORT_ACTIONS,

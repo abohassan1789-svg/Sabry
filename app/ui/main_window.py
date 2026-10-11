@@ -156,6 +156,9 @@ HIDDEN_NAV_KEYS: frozenset[str] = frozenset(
         # the «التقارير» section itself stays (KEEP_EMPTY_NAV_SECTIONS).
         "tawrid_customer_statement", "tawrid_supplier_statement", "tawrid_tractor_statement",
         "tawrid_comprehensive_report", "tawrid_treasury_statement",
+        # بيانات الشركة — hidden per user request (2026-10-11): the logo and السجل الضريبي
+        # are entered in «الشركات والمشاريع» now. Mirror in HIDDEN_TARGET_CODES.
+        "company_info",
     }
 )
 
@@ -177,7 +180,7 @@ KEEP_EMPTY_NAV_SECTIONS: frozenset[str] = frozenset({"reports"})
 # 3 = the dashboards and «النظام والصلاحيات» (لوحة التحكم is enabled where it is built).
 SEARCHABLE_COMBO_SCREENS: frozenset[str] = frozenset(
     {
-        "contractors_dashboard", "company_info", "contractors", "company_projects",
+        "contractors_dashboard", "contractors", "company_projects",
         "contractor_contracts", "contractor_extracts", "contractor_payments",
         "contractor_contracts_report", "contractor_extracts_report",
         "contractor_advance_report", "contractor_statement_report", "contractor_withholding_report",
