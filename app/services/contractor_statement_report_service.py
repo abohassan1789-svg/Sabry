@@ -53,7 +53,7 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
-from app.services.contractor_contract_service import to_decimal
+from app.services.contractor_contract_service import contract_label, to_decimal
 from app.services.contractor_payment_service import (
     ACCOUNT_OPENING,
     ADVANCE_PAYMENT,
@@ -71,6 +71,8 @@ from app.services.contractor_extract_service import (
 )
 
 KIND_EXTRACT, KIND_PAYMENT = "extract", "payment"
+# «العقد» on a payment made on no extract (user, 2026-10-13); one on an extract shows that extract's contract.
+GENERAL_PAYMENT = "دفعة عامة"
 
 RATE_KEYS = ("withholding_tax_pct", "advance_payment_pct", "vat_pct", "works_insurance_pct", "social_insurance_pct")
 # Amounts on an extract line (``extract_amounts`` keys), all summed in the totals.
@@ -109,6 +111,7 @@ def deductions_summary(lines: list[dict[str, Any]]) -> dict[str, Any]:
 def extract_line(extract: dict[str, Any]) -> dict[str, Any]:
     amounts = extract_amounts(extract)
     line = {**extract, "kind": KIND_EXTRACT, "date": _day(extract.get("extract_date")), "paid": ZERO,
+            "contract_label": contract_label(extract),
             "account_type": ALL_ACCOUNTS, "deductions": extract_deductions(extract)}
     line.update({key: to_decimal(extract.get(key)) for key in RATE_KEYS})
     line.update({key: amounts[key] for key in EXTRACT_AMOUNT_KEYS})
@@ -118,6 +121,7 @@ def extract_line(extract: dict[str, Any]) -> dict[str, Any]:
 def payment_line(payment: dict[str, Any]) -> dict[str, Any]:
     line = {**payment, "kind": KIND_PAYMENT, "date": _day(payment.get("payment_date")),
             "paid": _money(to_decimal(payment.get("amount"))),
+            "contract_label": contract_label(payment) or GENERAL_PAYMENT,
             "account_type": payment.get("account_type") or CURRENT_BALANCE}
     line.update({key: ZERO for key in EXTRACT_AMOUNT_KEYS})
     return line
@@ -292,7 +296,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
         extracts = self._db.fetch_all(
             "SELECT x.extract_id, x.extract_no, x.extract_date, x.contract_id, x.works_value, x.vat_pct, "
             "x.advance_payment_pct, x.withholding_tax_pct, x.works_insurance_pct, x.social_insurance_pct, "
-            "x.other_deductions, d.contractor_name "
+            "x.other_deductions, k.contract_no, k.contract_name, d.contractor_name "
             "FROM contractor_extracts x "
             "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
             "JOIN contractors d ON d.contractor_id = k.contractor_id "
@@ -307,11 +311,12 @@ class ContractorStatementReportService(ContractorContractsReportService):
         payments = self._db.fetch_all(
             "SELECT y.payment_id, y.payment_date, y.amount, y.payment_method, y.reference_no, y.extract_id, "
             "y.account_type, "
-            "x.extract_no, d.contractor_name "
+            "x.extract_no, pk.contract_no, pk.contract_name, d.contractor_name "
             "FROM contractor_payments y "
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
             "LEFT JOIN company_projects p ON p.project_id = y.project_id "  # a payment may have no project
             "LEFT JOIN contractor_extracts x ON x.extract_id = y.extract_id "
+            "LEFT JOIN contractor_contracts pk ON pk.contract_id = x.contract_id "
             "WHERE y.status = 'approved' AND d.status = 'approved' AND " + " AND ".join(payment_where),
             params,
         )

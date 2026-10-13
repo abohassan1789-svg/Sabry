@@ -232,14 +232,9 @@ def test_the_column_choice_is_kept_for_next_time(qt_app, settings):
     first.set_visible_columns(["extract_no", "works_value", "net"])
     first.close()
     second = ContractorExtractsReportScreen(FakeService(), settings=settings)
-    # «العقد» came after the choice was saved: it shows once (2026-10-13) ...
-    assert _visible(second) == ["contract_label", "extract_no", "works_value", "net"]
+    assert _visible(second) == ["extract_no", "works_value", "net"]
     assert second.chooser.boxes["net"].isChecked() and not second.chooser.boxes["vat_pct"].isChecked()
-    second.set_visible_columns(["extract_no", "works_value", "net"])
     second.close()
-    third = ContractorExtractsReportScreen(FakeService(), settings=settings)
-    assert _visible(third) == ["extract_no", "works_value", "net"]  # ... and hiding it sticks
-    third.close()
 
 
 def test_grouped_by_contractor_by_default(screen):

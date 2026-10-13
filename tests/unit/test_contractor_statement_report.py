@@ -52,6 +52,7 @@ NAME = "م. أحمد عبد الرحمن"
 def _extract(extract_id, date, works, other="0"):
     return {"extract_id": extract_id, "extract_no": f"A-H/CT-1001/EX-0{extract_id}",
             "extract_date": datetime.date(*date), "contract_id": 100, "contractor_name": NAME,
+            "contract_no": "A-H/CT-1001", "contract_name": "أعمال الخرسانة",
             "works_value": Decimal(works), "vat_pct": Decimal("14"), "advance_payment_pct": Decimal("10"),
             "withholding_tax_pct": Decimal("1"), "works_insurance_pct": Decimal("5"),
             "social_insurance_pct": Decimal("0"), "other_deductions": Decimal(other)}
@@ -59,7 +60,10 @@ def _extract(extract_id, date, works, other="0"):
 
 def _payment(payment_id, date, amount, method="نقدي", reference=None, extract_no=None):
     return {"payment_id": payment_id, "payment_date": datetime.date(*date), "amount": Decimal(amount),
-            "payment_method": method, "reference_no": reference, "extract_no": extract_no, "contractor_name": NAME}
+            "payment_method": method, "reference_no": reference, "extract_no": extract_no, "contractor_name": NAME,
+            # a payment on an extract carries that extract's contract (2026-10-13)
+            "contract_no": "A-H/CT-1001" if extract_no else None,
+            "contract_name": "أعمال الخرسانة" if extract_no else None}
 
 
 EXTRACTS = [_extract(1, (2026, 2, 15), "456000"), _extract(2, (2026, 3, 25), "228000", other="1000")]
@@ -231,13 +235,14 @@ def test_opens_on_the_first_contractor(screen):
 
 
 def test_the_users_columns_in_order(screen):
-    assert len(COLUMNS) == 20  # the user's 19 + «نوع الحساب» (2026-10-07)
-    assert [header.replace("\n", " ") for _k, header, _t in COLUMNS[:5]] == [
-        "التاريخ", "اسم المقاول", "رقم المستخلص", "نوع الحساب", "إجمالي المستخلص"]
+    assert len(COLUMNS) == 21  # the user's 19 + «نوع الحساب» (2026-10-07) + «العقد» (2026-10-13)
+    assert [header.replace("\n", " ") for _k, header, _t in COLUMNS[:6]] == [
+        "التاريخ", "اسم المقاول", "العقد", "رقم المستخلص", "نوع الحساب", "إجمالي المستخلص"]
     assert COLUMN_KEYS[-3:] == ("net", "paid", "balance")
-    assert len(DEFAULT_COLUMNS) == 15  # every column but the five rates
+    assert len(DEFAULT_COLUMNS) == 16  # every column but the five rates
     # The رصيد جاري tab opens on its three figures (user, 2026-10-07).
-    assert _visible(screen.table) == ["date", "contractor_name", "extract_no", "account_type", "net", "paid", "balance"]
+    assert _visible(screen.table) == ["date", "contractor_name", "contract_label", "extract_no", "account_type",
+                                      "net", "paid", "balance"]
 
 
 def test_rows_start_with_the_opening_balance(screen):
@@ -246,6 +251,9 @@ def test_rows_start_with_the_opening_balance(screen):
     assert "رصيد أول المدة" in _cell(screen, 0, "date")
     assert _cell(screen, 0, "balance") == "85,000.00"
     assert _cell(screen, 1, "extract_no") == "دفعة نقدي — عامة"
+    assert _cell(screen, 1, "contract_label") == "دفعة عامة"
+    assert _cell(screen, 2, "contract_label") == "A-H/CT-1001 — أعمال الخرسانة"
+    assert _cell(screen, 3, "contract_label") == "A-H/CT-1001 — أعمال الخرسانة"  # paid on EX-01
     assert _cell(screen, 1, "net") == ""          # a payment has no extract amounts
     assert _cell(screen, 2, "net") == "383,600.00"
     assert _cell(screen, 2, "paid") == ""
@@ -291,7 +299,7 @@ def test_period_moves_older_lines_into_the_opening_balance(screen):
 def test_column_chooser_hides_and_remembers(screen, settings):
     screen.set_visible_columns([key for key in COLUMN_KEYS if key not in ("date", "contractor_name")])
     assert screen.table.isColumnHidden(COLUMN_KEYS.index("date"))
-    assert "رصيد أول المدة" in _cell(screen, 0, "extract_no")  # the label moves to a visible column
+    assert "رصيد أول المدة" in _cell(screen, 0, "contract_label")  # the label moves to a visible column
     again = ContractorStatementReportScreen(FakeService(), settings=settings)
     assert "date" not in again.visible_columns and "vat_pct" in again.visible_columns
     again.close()
@@ -413,7 +421,7 @@ def test_the_chart_draws_three_lines(screen):
 
 def test_each_tab_opens_on_its_own_three_figures(screen):
     """«لما أضغط على تبويبة ... تظهر لي أهم ثلاث أعمدة تلقائيًا» (user, 2026-10-07)."""
-    identity = ["date", "contractor_name", "extract_no", "account_type"]
+    identity = ["date", "contractor_name", "contract_label", "extract_no", "account_type"]
     for index, figures in enumerate((["net", "paid", "balance"], ["works_insurance", "paid", "balance"],
                                      ["social_insurance", "paid", "balance"])):
         screen.account_tabs.setCurrentIndex(index)
@@ -430,8 +438,8 @@ def test_each_tab_remembers_its_own_choice(screen, settings):
     again.account_tabs.setCurrentIndex(1)
     assert _visible(again.table) == ["date", "works_value", "works_insurance", "paid", "balance"]
     again.chooser.default_button.click()  # «استعادة الافتراضي»: that tab's three figures
-    assert _visible(again.table) == ["date", "contractor_name", "extract_no", "account_type", "works_insurance",
-                                     "paid", "balance"]
+    assert _visible(again.table) == ["date", "contractor_name", "contract_label", "extract_no", "account_type",
+                                     "works_insurance", "paid", "balance"]
     again.close()
 
 

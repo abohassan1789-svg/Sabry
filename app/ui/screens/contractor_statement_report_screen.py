@@ -79,10 +79,11 @@ SETTINGS_KEY = "contractor_statement_report/columns"
 SHOW_DEDUCTIONS_KEY = "contractor_statement_report/show_deductions"  # the details button, per user
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
-# The user's 19 columns in their order: (line key, header, kind).
+# The user's columns in their order: (line key, header, kind).
 COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("date", "التاريخ", TEXT_COL),
     ("contractor_name", "اسم المقاول", TEXT_COL),
+    ("contract_label", "العقد", TEXT_COL),  # رقم — اسم, or «دفعة عامة» (2026-10-13)
     ("extract_no", "رقم المستخلص", TEXT_COL),
     ("account_type", "نوع الحساب", TEXT_COL),  # user, 2026-10-07
     ("works_value", "إجمالي\nالمستخلص", AMOUNT_COL),
@@ -108,7 +109,7 @@ HEADER = {key: header.replace("\n", " ") for key, header, _kind in COLUMNS}
 DEFAULT_COLUMNS = tuple(key for key in COLUMN_KEYS if KIND[key] != RATE_COL)
 # Each tab opens on its own three figures (user, 2026-10-07): the identity of the movement,
 # what the extracts add to that نوع الحساب, the collections and the running balance.
-IDENTITY_COLUMNS = ("date", "contractor_name", "extract_no", "account_type")
+IDENTITY_COLUMNS = ("date", "contractor_name", "contract_label", "extract_no", "account_type")
 TAB_DEFAULTS: dict[str, tuple[str, ...]] = {
     CURRENT_BALANCE: IDENTITY_COLUMNS + ("net", "paid", "balance"),
     WORKS_INSURANCE: IDENTITY_COLUMNS + ("works_insurance", "paid", "balance"),
@@ -118,7 +119,7 @@ TAB_SETTINGS = {CURRENT_BALANCE: "current", WORKS_INSURANCE: "works_insurance",
                 SOCIAL_INSURANCE: "social_insurance"}  # each tab's own saved choice
 
 COLUMN_GROUPS = (
-    ("بيانات الحركة", ("date", "contractor_name", "extract_no", "account_type")),
+    ("بيانات الحركة", IDENTITY_COLUMNS),
     ("المستخلص", ("works_value", "before_tax", "net")),
     ("الاستقطاعات (نسبة وقيمة)", tuple(key for key in COLUMN_KEYS[COLUMN_KEYS.index("withholding_tax_pct"):
                                                                COLUMN_KEYS.index("net")] if key != "before_tax")),
@@ -183,7 +184,8 @@ def cell_text(line: dict[str, Any], key: str) -> str:
         return date_text(line.get("date"))
     if key == "extract_no" and line["kind"] == KIND_PAYMENT:
         return payment_text(line)
-    if line["kind"] == KIND_PAYMENT and key not in ("contractor_name", "account_type", "paid", "balance"):
+    if line["kind"] == KIND_PAYMENT and key not in ("contractor_name", "contract_label", "account_type", "paid",
+                                                   "balance"):
         return ""
     if key == "paid" and line["kind"] == KIND_EXTRACT:
         return ""
@@ -307,7 +309,8 @@ class ContractorStatementReportScreen(ContractingReportBase):
 
     def _load_columns(self) -> dict[str, tuple[str, ...]]:
         """Every tab's saved choice, or that tab's own three figures if never saved."""
-        return {account: load_columns(self.settings, self._settings_key(account), COLUMN_KEYS, TAB_DEFAULTS[account])
+        return {account: load_columns(self.settings, self._settings_key(account), COLUMN_KEYS, TAB_DEFAULTS[account],
+                                      added=("contract_label",))
                 for account in EXTRACT_ACCOUNT_TYPES}
 
     @property

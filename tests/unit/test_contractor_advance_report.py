@@ -363,3 +363,10 @@ def test_a_new_column_shows_once_for_a_user_who_saved_a_choice(settings):
     assert load_columns(settings, "rep", keys, keys, added=("new",)) == ("a", "new")
     save_columns(settings, "rep", ("a",))  # the user hides it again
     assert load_columns(settings, "rep", keys, keys, added=("new",)) == ("a",)
+
+
+def test_a_new_column_is_not_forced_on_a_choice_saved_after_it(settings):
+    keys = ("a", "b", "new")
+    assert load_columns(settings, "fresh", keys, keys, added=("new",)) == keys  # never saved: defaults
+    save_columns(settings, "fresh", ("a",))  # the user's first choice already knew «new»
+    assert load_columns(settings, "fresh", keys, keys, added=("new",)) == ("a",)

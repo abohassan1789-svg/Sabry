@@ -152,17 +152,23 @@ def load_columns(settings: QSettings, prefix: str, all_keys: Iterable[str],
     """The current user's saved column choice, in table order; *defaults* if never saved.
 
     *added* are columns that came after the user may have saved a choice: each one is
-    switched on once (and the choice saved), so it shows; hiding it later sticks."""
+    switched on once (and the choice saved), so it shows; hiding it later sticks. A user
+    with no saved choice yet already sees them, so they are marked as shown then."""
     all_keys = tuple(all_keys)
     saved = settings.value(_columns_key(prefix))
+
+    def marker(key: str) -> str:
+        return f"{prefix}_added/{key}/{_columns_key(prefix).rsplit('/', 1)[-1]}"
+
     if saved is None:
+        for key in added:
+            settings.setValue(marker(key), "1")
         return defaults
     chosen = set(str(saved).split(","))
     changed = False
     for key in added:
-        marker = f"{prefix}_added/{key}/{_columns_key(prefix).rsplit('/', 1)[-1]}"
-        if settings.value(marker) is None:
-            settings.setValue(marker, "1")
+        if settings.value(marker(key)) is None:
+            settings.setValue(marker(key), "1")
             if key not in chosen:
                 chosen.add(key)
                 changed = True
