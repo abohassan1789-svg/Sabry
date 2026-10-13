@@ -194,7 +194,8 @@ def test_every_screen_shown_in_the_sidebar_is_covered():
         if section not in main_window.HIDDEN_NAV_SECTIONS
     }
     assert visible_sections == {"contracting", "reports", "system"}
-    pinned = {"crm_dashboard", "executive_dashboard"}  # لوحة التحكم is enabled where it's built
+    # The pinned dashboards under لوحة التحكم, unless hidden (both are since 2026-10-13).
+    pinned = {"crm_dashboard", "executive_dashboard"} - main_window.HIDDEN_NAV_KEYS
     expected = pinned.union(*(_visible_sidebar_keys(section) for section in visible_sections))
     assert main_window.SEARCHABLE_COMBO_SCREENS == expected
 

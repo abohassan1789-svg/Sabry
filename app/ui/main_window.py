@@ -159,6 +159,9 @@ HIDDEN_NAV_KEYS: frozenset[str] = frozenset(
         # بيانات الشركة — hidden per user request (2026-10-11): the logo and السجل الضريبي
         # are entered in «الشركات والمشاريع» now. Mirror in HIDDEN_TARGET_CODES.
         "company_info",
+        # «داشبورد» and «الداشبورد التنفيذية» under لوحة التحكم — hidden per user request
+        # (2026-10-13). Their pages and permissions stay; the home buttons aren't built.
+        "crm_dashboard", "executive_dashboard",
     }
 )
 
@@ -178,13 +181,13 @@ KEEP_EMPTY_NAV_SECTIONS: frozenset[str] = frozenset({"reports"})
 # Screens whose drop lists can be searched by any part of an item (user, 2026-10-07).
 # Only screens shown in the sidebar, added phase by phase: 1 = «المقاولات», 2 = «التقارير»,
 # 3 = the dashboards and «النظام والصلاحيات» (لوحة التحكم is enabled where it is built).
+# «داشبورد» / «الداشبورد التنفيذية» left it when they were hidden (2026-10-13).
 SEARCHABLE_COMBO_SCREENS: frozenset[str] = frozenset(
     {
         "contractors_dashboard", "contractors", "company_projects",
         "contractor_contracts", "contractor_extracts", "contractor_payments",
         "contractor_contracts_report", "contractor_extracts_report",
         "contractor_advance_report", "contractor_statement_report", "contractor_withholding_report",
-        "crm_dashboard", "executive_dashboard",
         "backup", "connection_settings", "users", "roles", "user_permissions",
     }
 )
@@ -595,17 +598,16 @@ class ReviewMainWindow(QMainWindow):
         self._nav_by_key["dashboard"] = dashboard_button
         layout.addWidget(dashboard_button)
 
-        crm_dashboard_button = self._make_home_button("داشبورد", "📊")
-        crm_dashboard_button.clicked.connect(lambda _c=False: self.open_screen("crm_dashboard"))
-        self.nav_buttons.append(crm_dashboard_button)
-        self._nav_by_key["crm_dashboard"] = crm_dashboard_button
-        layout.addWidget(crm_dashboard_button)
-
-        exec_dashboard_button = self._make_home_button("الداشبورد التنفيذية", "🧭")
-        exec_dashboard_button.clicked.connect(lambda _c=False: self.open_screen("executive_dashboard"))
-        self.nav_buttons.append(exec_dashboard_button)
-        self._nav_by_key["executive_dashboard"] = exec_dashboard_button
-        layout.addWidget(exec_dashboard_button)
+        # The two dashboards under it — unless hidden (HIDDEN_NAV_KEYS, since 2026-10-13).
+        for key, title, icon in (("crm_dashboard", "داشبورد", "📊"),
+                                 ("executive_dashboard", "الداشبورد التنفيذية", "🧭")):
+            if key in HIDDEN_NAV_KEYS:
+                continue
+            button = self._make_home_button(title, icon)
+            button.clicked.connect(lambda _c=False, k=key: self.open_screen(k))
+            self.nav_buttons.append(button)
+            self._nav_by_key[key] = button
+            layout.addWidget(button)
 
         # Collapsible sections (accordion). Whole sections in HIDDEN_NAV_SECTIONS
         # are skipped; items the user can't view are hidden; a section with no
