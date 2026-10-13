@@ -142,6 +142,7 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
     TITLE = "تقرير ضرائب الخصم"
     ICON = "🧾"
     PERMISSION_BASE = PERMISSION_BASE
+    CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
 
     def __init__(self, service: ContractorWithholdingReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -290,7 +291,9 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
                   "net": self.data["net"]}
         for key, value in values.items():
             self.figure_values[key].setText(_money(value))
-        cards = "بطاقات كل المقاولين" if filters["contractor_id"] is None else "بطاقة المقاول"
+        # One contractor: chosen, or the one whose contract «العقد» picks (2026-10-13).
+        everyone = filters["contractor_id"] is None and filters.get("contract_id") is None
+        cards = "بطاقات كل المقاولين" if everyone else "بطاقة المقاول"
         date_from = filters["date_from"]
         self.figure_hints["works_value"].setText(f"{totals['count']} مستخلصات")
         self.figure_hints["before_tax"].setText("قبل ضريبة القيمة المضافة")
@@ -299,7 +302,7 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
         self.figure_hints["withholding_tax"].setText(
             f"من {date_text(date_from)} إلى {date_text(filters['date_to'])}" if date_from else "كل الفترات")
         self.figure_hints["net"].setText("رصيد أول المدة + ضرائب الخصم على المستخلصات")
-        who = "كل المقاولين — " if filters["contractor_id"] is None else ""
+        who = "كل المقاولين — " if everyone else ""
         self.count_label.setText(f"{who}{totals['count']} مستخلصات")
         self._fill_table()
 

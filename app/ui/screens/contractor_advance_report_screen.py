@@ -408,6 +408,7 @@ class ContractorAdvanceReportScreen(ContractingReportBase):
     TITLE = "تقرير كشف حساب الدفعة المقدمة"
     ICON = "💳"
     PERMISSION_BASE = PERMISSION_BASE
+    CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
 
     def __init__(self, service: ContractorAdvanceReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:

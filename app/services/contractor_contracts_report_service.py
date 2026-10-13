@@ -187,15 +187,33 @@ class ContractorContractsReportService:
             "WHERE status = 'approved' ORDER BY contractor_code"
         )
 
+    def contract_choices(self, company_id: Any = None, project_id: Any = None,
+                         contractor_id: Any = None) -> list[dict[str, Any]]:
+        """The «العقد» filter (2026-10-13): approved contracts under the other filters, with
+        their ``contract_label``."""
+        where, params = ["k.status = 'approved'"], []
+        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id),
+                              ("k.contractor_id = %s", contractor_id)):
+            if value not in (None, ""):
+                where.append(clause)
+                params.append(value)
+        rows = self._db.fetch_all(
+            "SELECT k.contract_id, k.contract_no, k.contract_name FROM contractor_contracts k "
+            "JOIN company_projects p ON p.project_id = k.project_id "
+            "WHERE " + " AND ".join(where) + " ORDER BY k.contract_no",
+            params,
+        )
+        return [{**row, "contract_label": contract_label(row)} for row in rows]
+
     # -- the report ------------------------------------------------------------
 
     def report(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
-               project_id: Any = None, contractor_id: Any = None) -> list[dict[str, Any]]:
+               project_id: Any = None, contractor_id: Any = None, contract_id: Any = None) -> list[dict[str, Any]]:
         """The report lines for the filters (``None`` = الكل), oldest contract first."""
         where, params = ["k.status = 'approved'"], []
         for clause, value in (("k.contract_date >= %s", date_from), ("k.contract_date <= %s", date_to),
                               ("p.company_id = %s", company_id), ("k.project_id = %s", project_id),
-                              ("k.contractor_id = %s", contractor_id)):
+                              ("k.contractor_id = %s", contractor_id), ("k.contract_id = %s", contract_id)):
             if value not in (None, ""):
                 where.append(clause)
                 params.append(value)

@@ -145,6 +145,7 @@ class ContractorExtractsReportScreen(ContractingReportBase):
     TITLE = "تقرير مستخلصات المقاولين"
     ICON = "🧾"
     PERMISSION_BASE = PERMISSION_BASE
+    CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
 
     def __init__(self, service: ContractorExtractsReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:

@@ -22,6 +22,7 @@ import pytest
 from PySide6.QtCore import QPoint
 from PySide6.QtWidgets import QApplication
 
+from app.services.contractor_contract_service import contract_label
 from app.services.contractor_contracts_report_service import (
     STATUS_DONE,
     STATUS_NOT_STARTED,
@@ -161,6 +162,7 @@ def test_no_contracts_skips_the_extracts_query():
 class FakeService:
     def __init__(self):
         self.last_filters = None
+        self.contract_calls = []
 
     def company_choices(self):
         return [{"company_id": 10, "company_code": "A-H/CO-1001", "company_name": "الأفق للتطوير"},
@@ -175,11 +177,17 @@ class FakeService:
     def contractor_choices(self):
         return [{"contractor_id": 1, "contractor_code": "C1", "contractor_name": "م. أحمد عبد الرحمن"}]
 
+    def contract_choices(self, company_id=None, project_id=None, contractor_id=None):
+        self.contract_calls.append((company_id, project_id, contractor_id))
+        return [{"contract_id": c["contract_id"], "contract_label": contract_label(c)} for c in CONTRACTS
+                if company_id in (None, c["company_id"]) and contractor_id in (None, c["contractor_id"])]
+
     def report(self, **filters):
         self.last_filters = filters
         contracts = [c for c in CONTRACTS
                      if filters.get("company_id") in (None, c["company_id"])
-                     and filters.get("contractor_id") in (None, c["contractor_id"])]
+                     and filters.get("contractor_id") in (None, c["contractor_id"])
+                     and filters.get("contract_id") in (None, c["contract_id"])]
         return build_report(contracts, EXTRACTS)
 
 
@@ -375,3 +383,70 @@ def test_the_advance_left_takes_off_the_extracts_and_the_payments():
     assert row["advance_deducted"] == Decimal("50000.00") and row["advance_paid_out"] == Decimal("20000")
     assert row["remaining_advance"] == Decimal("30000.00")
     assert row["recovered_pct"] == Decimal("70")
+
+
+# -- «العقد» filter (user, 2026-10-13) -------------------------------------------------------
+
+
+def test_the_contract_filter_is_on_a_second_row(screen):
+    combo = screen.contract_combo
+    assert combo is not None and combo.itemText(0) == "الكل"
+    assert [combo.itemText(i) for i in range(1, combo.count())] == [
+        "A-H/CT-1001 — أعمال الخرسانة", "A-H/CT-1002", "A-H/CT-1003", "A-H/CT-1004"]
+    screen.show()
+    QApplication.processEvents()
+    assert combo.mapTo(screen, combo.rect().topLeft()).y() > \
+        screen.company_combo.mapTo(screen, screen.company_combo.rect().bottomLeft()).y()  # its own row
+    assert screen.filters()["contract_id"] is None
+
+
+def test_choosing_a_contract_narrows_the_report(screen):
+    screen.contract_combo.setCurrentIndex(screen.contract_combo.findData(2))
+    screen.run_report()
+    assert screen.service.last_filters["contract_id"] == 2
+    assert screen.progress_table.rowCount() == 2  # the contract + الإجمالي
+    assert screen.progress_table.item(0, PROGRESS_KEYS.index("contract_label")).text() == "A-H/CT-1002"
+
+
+def test_the_contract_list_follows_the_other_filters(screen):
+    screen.contract_combo.setCurrentIndex(screen.contract_combo.findData(2))  # الدلتا العقارية's
+    screen.company_combo.setCurrentIndex(screen.company_combo.findData(10))
+    assert screen.service.contract_calls[-1] == (10, None, None)
+    assert [screen.contract_combo.itemData(i) for i in range(screen.contract_combo.count())] == [None, 1, 4]
+    assert screen.contract_combo.currentData() is None  # the pick no longer fits: back to «الكل»
+    screen.contract_combo.setCurrentIndex(screen.contract_combo.findData(4))
+    screen.contractor_combo.setCurrentIndex(screen.contractor_combo.findData(1))
+    assert screen.service.contract_calls[-1] == (10, None, 1)
+    assert screen.contract_combo.currentData() == 4  # still fits: kept
+    screen.project_combo.setCurrentIndex(screen.project_combo.findData(12))
+    assert screen.service.contract_calls[-1] == (10, 12, 1)
+
+
+def test_reports_without_the_flag_have_no_contract_filter():
+    from app.ui.screens.contractor_statement_report_screen import ContractorStatementReportScreen
+    from app.ui.screens.contractors_dashboard_screen import ContractorsDashboardScreen
+    assert not ContractorStatementReportScreen.CONTRACT_FILTER and not ContractorsDashboardScreen.CONTRACT_FILTER
+
+
+class _Db:
+    def __init__(self, rows=()):
+        self.queries, self.rows = [], list(rows)
+
+    def fetch_all(self, sql, params=None):
+        self.queries.append((sql, params))
+        return list(self.rows) if len(self.queries) == 1 else []
+
+
+def test_service_contract_choices_and_filter():
+    db = _Db([{"contract_id": 7, "contract_no": "A-H/CT-1007", "contract_name": "تشطيبات"}])
+    service = ContractorContractsReportService(db)
+    assert service.contract_choices(10, None, 3) == [
+        {"contract_id": 7, "contract_no": "A-H/CT-1007", "contract_name": "تشطيبات",
+         "contract_label": "A-H/CT-1007 — تشطيبات"}]
+    sql, params = db.queries[0]
+    assert "k.status = 'approved'" in sql and "p.company_id = %s" in sql and "k.contractor_id = %s" in sql
+    assert "k.project_id = %s" not in sql and params == [10, 3]
+    db = _Db()
+    ContractorContractsReportService(db).report(contract_id=7)
+    sql, params = db.queries[0]
+    assert "k.contract_id = %s" in sql and params == [7]

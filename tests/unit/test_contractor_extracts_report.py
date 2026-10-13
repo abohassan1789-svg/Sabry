@@ -23,6 +23,7 @@ import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
+from app.services.contractor_contract_service import contract_label
 from app.services.contractor_extracts_report_service import (
     GROUP_COMPANY,
     GROUP_CONTRACTOR,
@@ -134,6 +135,7 @@ def test_the_period_filters_on_the_extract_date():
 class FakeService:
     def __init__(self):
         self.last_filters = None
+        self.contract_calls = []
 
     def company_choices(self):
         return [{"company_id": 10, "company_code": "C10", "company_name": "الأفق للتطوير"},
@@ -146,6 +148,11 @@ class FakeService:
 
     def contractor_choices(self):
         return [{"contractor_id": 1, "contractor_code": "D1", "contractor_name": "م. أحمد عبد الرحمن"}]
+
+    def contract_choices(self, company_id=None, project_id=None, contractor_id=None):
+        self.contract_calls.append((company_id, project_id, contractor_id))
+        return [{"contract_id": c["contract_id"], "contract_label": contract_label(c)} for c in EXTRACTS
+                if company_id in (None, c["company_id"]) and contractor_id in (None, c["contractor_id"])]
 
     def report(self, **filters):
         self.last_filters = filters

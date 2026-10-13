@@ -208,6 +208,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
     TITLE = "تقرير عقود المقاولين"
     ICON = "📈"
     PERMISSION_BASE = PERMISSION_BASE
+    CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
 
     def __init__(self, service: ContractorContractsReportService | None = None,
                  parent: QWidget | None = None) -> None:
@@ -361,4 +362,5 @@ class ContractorContractsReportScreen(ContractingReportBase):
         self._total_row(table, last, LABEL_SPAN)
         table.setRowHeight(last, 42)
         self.band_header.sync()
-        QTimer.singleShot(0, self.band_header.sync)  # after the columns settle
+        # after the columns settle; the header as context, so a closed report's timer never fires
+        QTimer.singleShot(0, self.band_header, self.band_header.sync)

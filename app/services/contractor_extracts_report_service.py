@@ -72,12 +72,12 @@ class ContractorExtractsReportService(ContractorContractsReportService):
     """The filter choices (companies, projects, contractors) are the contracts report's."""
 
     def report(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
-               project_id: Any = None, contractor_id: Any = None) -> list[dict[str, Any]]:
+               project_id: Any = None, contractor_id: Any = None, contract_id: Any = None) -> list[dict[str, Any]]:
         """The report lines for the filters (``None`` = الكل), oldest extract first."""
         where, params = ["x.status = 'approved'", "k.status = 'approved'"], []
         for clause, value in (("x.extract_date >= %s", date_from), ("x.extract_date <= %s", date_to),
                               ("p.company_id = %s", company_id), ("k.project_id = %s", project_id),
-                              ("k.contractor_id = %s", contractor_id)):
+                              ("k.contractor_id = %s", contractor_id), ("x.contract_id = %s", contract_id)):
             if value not in (None, ""):
                 where.append(clause)
                 params.append(value)

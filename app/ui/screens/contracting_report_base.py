@@ -1,9 +1,12 @@
 """What every contracting report shares: the green header and the filter bar.
 
 The filter bar is «كل الفترات», من/إلى، الشركة → المشروع (the project list
-follows the company)، المقاول, then عرض التقرير / تحديث / خروج. A report
-subclass sets ``TITLE``, ``ICON`` and ``PERMISSION_BASE``, builds the rest in
-``_build_body`` and fills it in ``run_report``.
+follows the company)، المقاول, then عرض التقرير / تحديث / خروج. A report that sets
+``CONTRACT_FILTER`` adds a second row with «العقد» (user, 2026-10-13): its list
+follows the company, project and contractor, and the report's service gets
+``contract_id``. A report subclass sets ``TITLE``, ``ICON`` and
+``PERMISSION_BASE``, builds the rest in ``_build_body`` and fills it in
+``run_report``.
 """
 
 from __future__ import annotations
@@ -285,6 +288,7 @@ class ContractingReportBase(QWidget):
     TITLE = ""
     ICON = "📈"
     PERMISSION_BASE = ""
+    CONTRACT_FILTER = False  # «العقد» on a second filter row; the service takes ``contract_id``
 
     def __init__(self, service: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -379,9 +383,12 @@ class ContractingReportBase(QWidget):
     def _build_filters(self) -> QFrame:
         bar = QFrame()
         bar.setStyleSheet("QFrame { background:#FFFFFF; border:1px solid #E5EAF0; border-radius:7px; }")
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(10, 8, 10, 8)
+        rows = QVBoxLayout(bar)
+        rows.setContentsMargins(10, 8, 10, 8)
+        rows.setSpacing(8)
+        layout = QHBoxLayout()
         layout.setSpacing(8)
+        rows.addLayout(layout)
         today = QDate.currentDate()
         self.all_dates = QCheckBox("كل الفترات")
         self.all_dates.setChecked(True)
@@ -410,16 +417,29 @@ class ContractingReportBase(QWidget):
             button.setIcon(self.style().standardIcon(icon))
             button.setStyleSheet(_button_style(bg, hover))
             layout.addWidget(button)
+        self.contract_combo: QComboBox | None = None
+        if self.CONTRACT_FILTER:
+            second = QHBoxLayout()
+            second.setSpacing(8)
+            self.contract_combo = self._combo(460)
+            second.addWidget(self._caption("العقد"))
+            second.addWidget(self.contract_combo)
+            second.addStretch(1)
+            rows.addLayout(second)
 
         self.all_dates.toggled.connect(self._sync_dates)
         self.company_combo.currentIndexChanged.connect(self._company_changed)
+        if self.contract_combo is not None:
+            self.project_combo.currentIndexChanged.connect(self._load_contracts)
+            self.contractor_combo.currentIndexChanged.connect(self._load_contracts)
         self.show_button.clicked.connect(self.run_report)
         # Same path as the automatic reload: a database error is shown, never raised.
         self.refresh_button.clicked.connect(self.reload_lists)
         self.exit_button.clicked.connect(self.window().close)
         for widget in (self.all_dates, self.date_from, self.date_to, self.company_combo,
-                       self.project_combo, self.contractor_combo):
-            widget.setEnabled(self._perm_filter)
+                       self.project_combo, self.contractor_combo, self.contract_combo):
+            if widget is not None:
+                widget.setEnabled(self._perm_filter)
         self._sync_dates()
         return bar
 
@@ -443,13 +463,24 @@ class ContractingReportBase(QWidget):
         self._fill(self.contractor_combo, self.service.contractor_choices(), "contractor_id",
                    lambda r: r["contractor_name"])
         self._load_projects()
+        self._load_contracts()
 
     def _load_projects(self) -> None:
         self._fill(self.project_combo, self.service.project_choices(self.company_combo.currentData()),
                    "project_id", lambda r: r["project_name"])
 
+    def _load_contracts(self) -> None:
+        """«العقد»: the contracts under the chosen company / project / contractor (the pick is
+        kept while it still fits, else «الكل»)."""
+        if self.contract_combo is None:
+            return
+        rows = self.service.contract_choices(self.company_combo.currentData(), self.project_combo.currentData(),
+                                             self.contractor_combo.currentData())
+        self._fill(self.contract_combo, rows, "contract_id", lambda r: r["contract_label"])
+
     def _company_changed(self) -> None:
         self._load_projects()
+        self._load_contracts()
 
     def filters(self) -> dict[str, Any]:
         dated = not self.all_dates.isChecked()
@@ -459,6 +490,7 @@ class ContractingReportBase(QWidget):
             "company_id": self.company_combo.currentData(),
             "project_id": self.project_combo.currentData(),
             "contractor_id": self.contractor_combo.currentData(),
+            **({"contract_id": self.contract_combo.currentData()} if self.contract_combo is not None else {}),
         }
 
     def refresh_all(self) -> None:

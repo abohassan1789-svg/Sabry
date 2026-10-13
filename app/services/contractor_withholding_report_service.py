@@ -56,20 +56,27 @@ class ContractorWithholdingReportService(ContractorExtractsReportService):
     """The filter choices are the contracts report's; the lines are the extracts report's."""
 
     def withholding_report(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
-                           project_id: Any = None, contractor_id: Any = None) -> dict[str, Any]:
+                           project_id: Any = None, contractor_id: Any = None,
+                           contract_id: Any = None) -> dict[str, Any]:
         # Every line up to «إلى»: the ones before «من» feed رصيد أول المدة.
-        rows = self.report(None, date_to, company_id, project_id, contractor_id)
-        return build_report(self.card_withholding(company_id, project_id, contractor_id), rows, date_from)
+        rows = self.report(None, date_to, company_id, project_id, contractor_id, contract_id)
+        return build_report(self.card_withholding(company_id, project_id, contractor_id, contract_id),
+                            rows, date_from)
 
-    def card_withholding(self, company_id: Any = None, project_id: Any = None, contractor_id: Any = None) -> Any:
-        """«ضرائب الخصم والإضافة» summed over the approved contractors' cards the filters cover."""
+    def card_withholding(self, company_id: Any = None, project_id: Any = None, contractor_id: Any = None,
+                         contract_id: Any = None) -> Any:
+        """«ضرائب الخصم والإضافة» summed over the approved contractors' cards the filters cover.
+
+        A card is the contractor's, never a contract's (user, 2026-10-13): with «العقد» chosen
+        it is the card of that contract's contractor."""
         if contractor_id not in (None, ""):
             row = self._db.fetch_one(
                 "SELECT COALESCE(sum(withholding_tax_amount), 0) AS amount FROM contractors "
                 "WHERE contractor_id = %s AND status = 'approved'", [contractor_id])
             return row["amount"] if row else ZERO
         where, params = [], []
-        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id)):
+        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id),
+                              ("k.contract_id = %s", contract_id)):
             if value not in (None, ""):
                 where.append(clause)
                 params.append(value)

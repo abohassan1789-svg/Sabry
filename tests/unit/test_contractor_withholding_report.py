@@ -9,6 +9,7 @@ import pytest
 from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
+from app.services.contractor_contract_service import contract_label
 from app.services.contractor_extracts_report_service import report_row
 from app.services.contractor_withholding_report_service import (
     ContractorWithholdingReportService,
@@ -28,7 +29,7 @@ def _extract(extract_id, date, works, withholding="1", contractor="م. أحمد 
         "withholding_tax_pct": Decimal(withholding), "works_insurance_pct": Decimal("5"),
         "social_insurance_pct": Decimal("0"), "other_deductions": Decimal("0"),
         "contractor_id": 1, "contractor_name": contractor, "project_id": 21, "project_name": project,
-        "company_id": 10, "company_name": company, "contract_no": "A-H/CT-1001",
+        "company_id": 10, "company_name": company, "contract_id": 1, "contract_no": "A-H/CT-1001",
         "contract_name": "أعمال الخرسانة" if extract_id == 1 else None})
 
 
@@ -89,6 +90,12 @@ def test_service_reads_the_cards_the_filters_cover():
     ContractorWithholdingReportService(db).withholding_report(company_id=10, project_id=21)
     sql, params = db.queries[-1]  # the extracts first, then the cards
     assert "IN (SELECT k.contractor_id" in sql and params == [10, 21]
+    # «العقد» (2026-10-13): its extracts only, and the card of that contract's contractor
+    db = _Db()
+    ContractorWithholdingReportService(db).withholding_report(contract_id=7)
+    (extracts_sql, extracts_params), (card_sql, card_params) = db.queries[0], db.queries[-1]
+    assert "x.contract_id = %s" in extracts_sql and extracts_params == [7]
+    assert "IN (SELECT k.contractor_id" in card_sql and "k.contract_id = %s" in card_sql and card_params == [7]
 
 
 def test_service_lists_every_extract_up_to_to():
@@ -106,6 +113,7 @@ def test_service_lists_every_extract_up_to_to():
 class FakeService:
     def __init__(self):
         self.last_filters = None
+        self.contract_calls = []
 
     def company_choices(self):
         return [{"company_id": 10, "company_code": "C10", "company_name": "الأفق للتطوير العقاري"}]
@@ -115,6 +123,11 @@ class FakeService:
 
     def contractor_choices(self):
         return [{"contractor_id": 1, "contractor_code": "D1", "contractor_name": "م. أحمد عبد الرحمن"}]
+
+    def contract_choices(self, company_id=None, project_id=None, contractor_id=None):
+        self.contract_calls.append((company_id, project_id, contractor_id))
+        return [{"contract_id": c["contract_id"], "contract_label": contract_label(c)} for c in ROWS
+                if company_id in (None, c["company_id"]) and contractor_id in (None, c["contractor_id"])]
 
     def withholding_report(self, **filters):
         self.last_filters = filters
@@ -207,3 +220,11 @@ def test_wrap_text_shares_the_width_and_is_remembered(screen, settings, qt_app):
     again = ContractorWithholdingReportScreen(FakeService(), settings=settings)
     assert again.wrap and again.wrap_button.isChecked()
     again.close()
+
+
+def test_a_chosen_contract_reads_as_one_contractors_card(screen):
+    """«العقد» (2026-10-13): the card is that contract's contractor's, not every contractor's."""
+    screen.contract_combo.setCurrentIndex(1)
+    screen.run_report()
+    assert screen.service.last_filters["contract_id"] == 1
+    assert not screen.count_label.text().startswith("كل المقاولين")
