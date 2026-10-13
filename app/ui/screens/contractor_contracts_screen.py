@@ -30,7 +30,8 @@ import datetime
 from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QDate, Qt, QTimer
+from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer
+from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -60,6 +61,11 @@ from app.services.contractor_contract_service import (
     ContractorContractService,
     contract_amounts,
     to_decimal,
+)
+from app.services.contractor_extract_service import (
+    DEFAULT_WORKS_INSURANCE_PCT,
+    SOCIAL_OPTIONS,
+    WITHHOLDING_OPTIONS,
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
@@ -124,6 +130,42 @@ def _card_frame(name: str) -> QFrame:
     return frame
 
 
+# ضرائب الخصم / التأمينات are drop lists like the extract's (user, 2026-10-13); the rest stay typed.
+LIST_OPTIONS = {"tax_discount_pct": WITHHOLDING_OPTIONS, "social_insurance_pct": SOCIAL_OPTIONS}
+
+
+class RateCombo(QComboBox):
+    """A rate list the user can also type into (user, 2026-10-02): the usual
+    choices drop down, any other rate 0–100 can be written in, «%» optional."""
+
+    def __init__(self, options: tuple[Decimal, ...], color: str) -> None:
+        super().__init__()
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.NoInsert)
+        self.setMinimumHeight(36)
+        self.setFixedWidth(110)
+        self.setLayoutDirection(Qt.LeftToRight)
+        self.setStyleSheet(
+            f"QComboBox {{ background:#FFFFFF; border:1.5px solid {color}; border-radius:7px; "
+            f"padding:4px 8px; font-size:15px; font-weight:900; color:{color}; }}"
+            "QComboBox:disabled { background:#F8FAFC; }"
+        )
+        for option in options:
+            self.addItem(f"{_rate_text(option)}%", str(option))
+        self.lineEdit().setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,3}([.,]\d{0,3})?\s*%?")))
+        self.lineEdit().editingFinished.connect(lambda: self.set_value(self.value()))
+
+    def value(self) -> Decimal:
+        return to_decimal(self.currentText().replace(",", "."))
+
+    def set_value(self, value: Any) -> None:
+        wanted = to_decimal(value)
+        index = next((i for i in range(self.count()) if to_decimal(self.itemData(i)) == wanted), -1)
+        if index >= 0:
+            self.setCurrentIndex(index)
+        self.setEditText(f"{_rate_text(wanted)}%")
+
+
 class ContractForm(QWidget):
     """The contract's fields plus the live rate amounts. ``wide`` = tab 7's layout."""
 
@@ -149,10 +191,16 @@ class ContractForm(QWidget):
         self.project = self._combo()
         self.company.currentIndexChanged.connect(self._on_company_changed)
 
-        self.rates: dict[str, QDoubleSpinBox] = {}
+        self.rates: dict[str, QWidget] = {}
         self.amounts: dict[str, QLabel] = {}
         for key, _label in RATE_FIELDS:
             color = RATE_COLORS[key][0]
+            if key in LIST_OPTIONS:
+                combo = RateCombo(LIST_OPTIONS[key], color)
+                combo.currentTextChanged.connect(self.recalc)
+                self.rates[key] = combo
+                self.amounts[key] = self._amount_label()
+                continue
             spin = QDoubleSpinBox()
             spin.setRange(0, 100)
             spin.setDecimals(2)
@@ -169,15 +217,7 @@ class ContractForm(QWidget):
             )
             spin.valueChanged.connect(self.recalc)
             self.rates[key] = spin
-            amount = QLabel("0.00")
-            amount.setLayoutDirection(Qt.LeftToRight)
-            amount.setAlignment(Qt.AlignLeft | Qt.AlignAbsolute | Qt.AlignVCenter)
-            amount.setMinimumWidth(130)
-            amount.setStyleSheet(
-                "background:#EEF2F6; border:1px solid #CBD5E1; border-radius:7px; padding:7px 10px; "
-                f"font-size:14px; font-weight:900; color:{TEXT};"
-            )
-            self.amounts[key] = amount
+            self.amounts[key] = self._amount_label()
         self.breadcrumb = QLabel("")
         self.breadcrumb.setWordWrap(True)
         self.breadcrumb.setStyleSheet(f"font-size:13px; font-weight:800; color:{MUTED}; background:transparent; border:none;")
@@ -186,6 +226,18 @@ class ContractForm(QWidget):
         self.set_editing(False)
 
     # -- widgets -------------------------------------------------------------
+
+    @staticmethod
+    def _amount_label() -> QLabel:
+        amount = QLabel("0.00")
+        amount.setLayoutDirection(Qt.LeftToRight)
+        amount.setAlignment(Qt.AlignLeft | Qt.AlignAbsolute | Qt.AlignVCenter)
+        amount.setMinimumWidth(130)
+        amount.setStyleSheet(
+            "background:#EEF2F6; border:1px solid #CBD5E1; border-radius:7px; padding:7px 10px; "
+            f"font-size:14px; font-weight:900; color:{TEXT};"
+        )
+        return amount
 
     def _line_edit(self, placeholder: str, ltr: bool = False) -> QLineEdit:
         editor = QLineEdit()
@@ -351,7 +403,7 @@ class ContractForm(QWidget):
             self.set_projects(record.get("company_id"), record.get("project_id"))
             self.contract_value.setText(_money(record.get("contract_value")))
             for key, _label in RATE_FIELDS:
-                self.rates[key].setValue(float(record.get(key) or 0))
+                self._set_rate(key, record.get(key))
             self.breadcrumb.setText(
                 f"🏢 {record.get('company_name') or ''}  ›  📁 {record.get('project_name') or ''}"
                 f"  ›  📄 {record.get('contract_no') or ''}"
@@ -366,8 +418,8 @@ class ContractForm(QWidget):
             self.contract_no.clear()
             self.contract_date.setDate(QDate.currentDate())
             self.contract_value.clear()
-            for spin in self.rates.values():
-                spin.setValue(0)
+            for key in self.rates:
+                self._set_rate(key, 0)
             self.breadcrumb.setText(breadcrumb)
         finally:
             self._loading = False
@@ -377,6 +429,8 @@ class ContractForm(QWidget):
                   project_id: Any = None) -> None:
         self.clear("عقد جديد")
         self.contract_no.setText(contract_no)
+        # Like a new extract (user, 2026-10-13): تأمين الأعمال 5%, the two lists start at 0%.
+        self._set_rate("works_insurance_pct", DEFAULT_WORKS_INSURANCE_PCT)
         if contractor_id is not None:
             _select_data(self.contractor, contractor_id)
         if company_id is not None:
@@ -393,13 +447,25 @@ class ContractForm(QWidget):
             "project_id": self.project.currentData(),
             "contract_value": self.contract_value.text(),
         }
-        for key, spin in self.rates.items():
-            values[key] = Decimal(str(round(spin.value(), 2)))
+        for key in self.rates:
+            values[key] = self.rate(key)
         return values
 
+    def _set_rate(self, key: str, value: Any) -> None:
+        control = self.rates[key]
+        if isinstance(control, RateCombo):
+            control.set_value(value)
+        else:
+            control.setValue(float(to_decimal(value)))
+
+    def rate(self, key: str) -> Decimal:
+        control = self.rates[key]
+        if isinstance(control, RateCombo):
+            return control.value()
+        return Decimal(str(round(control.value(), 2)))
+
     def recalc(self) -> None:
-        amounts = contract_amounts(self.contract_value.text(),
-                                   {key: spin.value() for key, spin in self.rates.items()})
+        amounts = contract_amounts(self.contract_value.text(), {key: self.rate(key) for key in self.rates})
         for key, label in self.amounts.items():
             label.setText(_money(amounts[key]))
 
@@ -415,9 +481,12 @@ class ContractForm(QWidget):
         self.contract_date.setCalendarPopup(editing)
         for combo in (self.contractor, self.company, self.project):
             combo.setEnabled(editing)
-        for spin in self.rates.values():
-            spin.setReadOnly(not editing)
-            spin.setButtonSymbols(QDoubleSpinBox.UpDownArrows if editing else QDoubleSpinBox.NoButtons)
+        for control in self.rates.values():
+            if isinstance(control, RateCombo):
+                control.setEnabled(editing)
+            else:
+                control.setReadOnly(not editing)
+                control.setButtonSymbols(QDoubleSpinBox.UpDownArrows if editing else QDoubleSpinBox.NoButtons)
 
 
 class ContractorContractsScreen(QWidget):

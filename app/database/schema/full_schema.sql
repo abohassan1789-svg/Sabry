@@ -3488,8 +3488,8 @@ CREATE TABLE IF NOT EXISTS public.contractor_contracts (
     contract_value numeric(18,2) DEFAULT 0 NOT NULL,
     advance_payment_pct numeric(5,2) DEFAULT 0 NOT NULL,   -- نسبة الدفعة المقدمة
     works_insurance_pct numeric(5,2) DEFAULT 0 NOT NULL,   -- نسبة تأمين الأعمال
-    tax_discount_pct numeric(5,2) DEFAULT 0 NOT NULL,      -- نسبة الضرائب والخصم
-    social_insurance_pct numeric(5,2) DEFAULT 0 NOT NULL,  -- نسبة التأمينات الاجتماعية
+    tax_discount_pct numeric(6,3) DEFAULT 0 NOT NULL,      -- نسبة الضرائب والخصم
+    social_insurance_pct numeric(6,3) DEFAULT 0 NOT NULL,  -- نسبة التأمينات الاجتماعية
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
     CONSTRAINT ck_contractor_contracts_no_not_blank CHECK ((char_length(btrim((contract_no)::text)) > 0)),
@@ -3822,3 +3822,13 @@ SELECT x.extract_id, 1, 'أخرى', 'رصيد سابق قبل التفصيل', x
 ALTER TABLE public.client_companies ADD COLUMN IF NOT EXISTS tax_registration_no character varying(50);
 ALTER TABLE public.client_companies ADD COLUMN IF NOT EXISTS logo bytea;
 ALTER TABLE public.client_companies ADD COLUMN IF NOT EXISTS logo_mime character varying(64);
+-- 2026-10-13 (user): the contract's ضرائب الخصم / التأمينات are drop lists like the extract's,
+-- and the social list has 0.365%: widen both to three decimals (no-op once done).
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'contractor_contracts'
+             AND column_name IN ('tax_discount_pct', 'social_insurance_pct') AND numeric_scale < 3) THEN
+    ALTER TABLE public.contractor_contracts
+      ALTER COLUMN tax_discount_pct TYPE numeric(6,3),
+      ALTER COLUMN social_insurance_pct TYPE numeric(6,3);
+  END IF;
+END $$;

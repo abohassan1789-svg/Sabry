@@ -35,6 +35,7 @@ from app.ui.screens.contractor_contracts_screen import (
     TAB_CONTRACTOR,
     TAB_TREE,
     ContractorContractsScreen,
+    RateCombo,
 )
 
 CONTRACTORS = [
@@ -296,9 +297,58 @@ def test_amounts_update_while_typing(screen):
     form = screen.tree_form
     form.contract_value.setText("1000000")
     form.rates["works_insurance_pct"].setValue(5)
-    form.rates["social_insurance_pct"].setValue(2.5)
+    form.rates["social_insurance_pct"].set_value("2.5")
     assert form.amounts["works_insurance_pct"].text() == "50,000.00"
     assert form.amounts["social_insurance_pct"].text() == "25,000.00"
+
+
+def test_withholding_and_social_rates_are_drop_lists_like_the_extract(screen):
+    form = screen.tree_form
+    for key, options in (("tax_discount_pct", ["0%", "1%", "3%", "5%"]),
+                         ("social_insurance_pct", ["0%", "0.365%", "2.8%", "3.6%"])):
+        combo = form.rates[key]
+        assert isinstance(combo, RateCombo)
+        assert [combo.itemText(i) for i in range(combo.count())] == options
+    for tab_form in (screen.tree_form, screen.card_form):
+        assert not isinstance(tab_form.rates["works_insurance_pct"], RateCombo)
+        assert isinstance(tab_form.rates["social_insurance_pct"], RateCombo)
+
+
+def test_a_new_contract_starts_like_a_new_extract(screen):
+    screen.new_contract()
+    form = screen.tree_form
+    assert form.rate("works_insurance_pct") == Decimal("5")
+    assert form.rate("tax_discount_pct") == Decimal("0")
+    assert form.rate("social_insurance_pct") == Decimal("0")
+    assert form.rates["social_insurance_pct"].isEnabled()
+
+
+def test_list_rates_are_saved_with_three_decimals_and_typed_rates_still_work(screen):
+    screen.tree.setCurrentItem(screen._tree_items[("project", 10)])
+    screen.new_contract()
+    form = screen.tree_form
+    form.contractor.setCurrentIndex(form.contractor.findData(2))
+    form.contract_value.setText("1000000")
+    social = form.rates["social_insurance_pct"]
+    social.setCurrentIndex(social.findText("0.365%"))
+    form.rates["tax_discount_pct"].setEditText("2")  # not in the list: typed by hand
+    form.rates["tax_discount_pct"].lineEdit().editingFinished.emit()
+    assert form.amounts["social_insurance_pct"].text() == "3,650.00"
+    assert form.amounts["tax_discount_pct"].text() == "20,000.00"
+    screen.save_record()
+    data, _record_id = screen.service.saved[-1]
+    assert data["social_insurance_pct"] == Decimal("0.365")
+    assert data["tax_discount_pct"] == Decimal("2")
+    assert data["works_insurance_pct"] == Decimal("5")
+
+
+def test_a_saved_rate_outside_the_list_is_shown_as_it_is(screen):
+    screen.load_contract(101)  # its social rate (2%) is not one of the list's
+    form = screen.tree_form
+    assert form.rates["social_insurance_pct"].currentText() == "2%"
+    assert form.rate("social_insurance_pct") == Decimal("2")
+    assert form.amounts["social_insurance_pct"].text() == "96,000.00"
+    assert not form.rates["social_insurance_pct"].isEnabled()  # view mode
 
 
 def test_saving_a_new_contract_sends_every_field(screen):

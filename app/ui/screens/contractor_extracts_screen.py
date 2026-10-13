@@ -25,8 +25,8 @@ import datetime
 from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer, Signal
-from PySide6.QtGui import QKeySequence, QRegularExpressionValidator, QShortcut
+from PySide6.QtCore import QDate, Qt, QTimer, Signal
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -79,6 +79,7 @@ from app.ui.screens.contractor_contracts_screen import (
     _COMBO_QSS,
     _EDITOR_QSS,
     RATE_COLORS,
+    RateCombo,
     _caption,
     _card_frame,
     _money,
@@ -124,38 +125,6 @@ def contract_info_html(contract: dict[str, Any] | None) -> str:
         f"قيمة العقد <b>{_money(contract.get('contract_value'))}</b><br>"
         f"<span style='color:{MUTED}'>نسب العقد (للعلم فقط):</span> {chips}"
     )
-
-
-class RateCombo(QComboBox):
-    """A rate list the user can also type into (user, 2026-10-02): the usual
-    choices drop down, any other rate 0–100 can be written in, «%» optional."""
-
-    def __init__(self, options: tuple[Decimal, ...], color: str) -> None:
-        super().__init__()
-        self.setEditable(True)
-        self.setInsertPolicy(QComboBox.NoInsert)
-        self.setMinimumHeight(36)
-        self.setFixedWidth(110)
-        self.setLayoutDirection(Qt.LeftToRight)
-        self.setStyleSheet(
-            f"QComboBox {{ background:#FFFFFF; border:1.5px solid {color}; border-radius:7px; "
-            f"padding:4px 8px; font-size:15px; font-weight:900; color:{color}; }}"
-            "QComboBox:disabled { background:#F8FAFC; }"
-        )
-        for option in options:
-            self.addItem(f"{_rate_text(option)}%", str(option))
-        self.lineEdit().setValidator(QRegularExpressionValidator(QRegularExpression(r"\d{0,3}([.,]\d{0,3})?\s*%?")))
-        self.lineEdit().editingFinished.connect(lambda: self.set_value(self.value()))
-
-    def value(self) -> Decimal:
-        return to_decimal(self.currentText().replace(",", "."))
-
-    def set_value(self, value: Any) -> None:
-        wanted = to_decimal(value)
-        index = next((i for i in range(self.count()) if to_decimal(self.itemData(i)) == wanted), -1)
-        if index >= 0:
-            self.setCurrentIndex(index)
-        self.setEditText(f"{_rate_text(wanted)}%")
 
 
 class ExtractForm(QWidget):
