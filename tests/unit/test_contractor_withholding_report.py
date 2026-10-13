@@ -28,7 +28,8 @@ def _extract(extract_id, date, works, withholding="1", contractor="م. أحمد 
         "withholding_tax_pct": Decimal(withholding), "works_insurance_pct": Decimal("5"),
         "social_insurance_pct": Decimal("0"), "other_deductions": Decimal("0"),
         "contractor_id": 1, "contractor_name": contractor, "project_id": 21, "project_name": project,
-        "company_id": 10, "company_name": company})
+        "company_id": 10, "company_name": company, "contract_no": "A-H/CT-1001",
+        "contract_name": "أعمال الخرسانة" if extract_id == 1 else None})
 
 
 # 456,000 → صافي الأعمال 400,000 → 1% = 4,000; 171,000 → 150,000 → 3% = 4,500.
@@ -147,7 +148,7 @@ def _cell(screen, row, key):
 
 def test_the_users_columns_in_order(screen):
     headers = [screen.table.horizontalHeaderItem(i).text().replace("\n", " ") for i in range(len(COLUMN_KEYS))]
-    assert headers == ["التاريخ", "اسم المقاول", "اسم المشروع", "اسم الشركة", "إجمالي المستخلص",
+    assert headers == ["التاريخ", "اسم المقاول", "اسم المشروع", "اسم الشركة", "العقد", "إجمالي المستخلص",
                        "نسبة الضريبة", "صافي الأعمال", "نسبة ضرائب الخصم", "قيمة ضرائب الخصم"]
     assert not any(screen.table.isColumnHidden(i) for i in range(len(COLUMN_KEYS)))
 
@@ -163,6 +164,8 @@ def test_rows_and_the_totals_row(screen):
     assert screen.table.rowCount() == 3
     assert _cell(screen, 0, "extract_date") == "2026-01-12"
     assert _cell(screen, 0, "vat_pct") == "14%"
+    assert _cell(screen, 0, "contract_label") == "A-H/CT-1001 — أعمال الخرسانة"
+    assert _cell(screen, 1, "contract_label") == "A-H/CT-1001"
     assert _cell(screen, 0, "before_tax") == "400,000.00"
     assert _cell(screen, 1, "withholding_tax_pct") == "3%"
     assert _cell(screen, 1, "withholding_tax") == "4,500.00"
@@ -186,7 +189,7 @@ def test_column_chooser_hides_and_remembers(screen, settings):
     screen.set_visible_columns([key for key in COLUMN_KEYS if key not in ("extract_date", "company_name")])
     assert screen.table.isColumnHidden(COLUMN_KEYS.index("extract_date"))
     assert _cell(screen, 2, "contractor_name") == "الإجمالي — 2 مستخلصات"  # the label moves along
-    assert screen.columns_count.text() == "7 من 9 أعمدة"
+    assert screen.columns_count.text() == "8 من 10 أعمدة"
     again = ContractorWithholdingReportScreen(FakeService(), settings=settings)
     assert "extract_date" not in again.visible_columns and "project_name" in again.visible_columns
     again.close()

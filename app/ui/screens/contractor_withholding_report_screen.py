@@ -54,12 +54,13 @@ COLUMNS_KEY = "contractor_withholding_report/columns"
 WRAP_KEY = "contractor_withholding_report/wrap"
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
-# The user's 9 columns in their order: (row key, header, kind).
+# The user's columns in their order: (row key, header, kind).
 COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("extract_date", "التاريخ", TEXT_COL),
     ("contractor_name", "اسم المقاول", TEXT_COL),
     ("project_name", "اسم المشروع", TEXT_COL),
     ("company_name", "اسم الشركة", TEXT_COL),
+    ("contract_label", "العقد", TEXT_COL),  # رقم — اسم (2026-10-13)
     ("works_value", "إجمالي\nالمستخلص", AMOUNT_COL),
     ("vat_pct", "نسبة\nالضريبة", RATE_COL),
     ("before_tax", "صافي\nالأعمال", AMOUNT_COL),
@@ -71,9 +72,9 @@ KIND = {key: kind for key, _header, kind in COLUMNS}
 HEADER = {key: header.replace("\n", " ") for key, header, _kind in COLUMNS}
 DEFAULT_COLUMNS = COLUMN_KEYS
 COLUMN_GROUPS = (
-    ("بيانات المستخلص", COLUMN_KEYS[:4]),
-    ("المبالغ", COLUMN_KEYS[4:7]),
-    ("ضرائب الخصم", COLUMN_KEYS[7:]),
+    ("بيانات المستخلص", COLUMN_KEYS[:5]),
+    ("المبالغ", COLUMN_KEYS[5:8]),
+    ("ضرائب الخصم", COLUMN_KEYS[8:]),
 )
 
 # The band's figures, right to left: (key, caption, the sign before it).
@@ -146,7 +147,8 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
         self.settings = settings or report_settings()
         self.data: dict[str, Any] = empty_report()
-        self.visible_columns = load_columns(self.settings, COLUMNS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS)
+        self.visible_columns = load_columns(self.settings, COLUMNS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS,
+                                            added=("contract_label",))
         self.wrap = load_flag(self.settings, WRAP_KEY)
         super().__init__(service or ContractorWithholdingReportService(), parent)
 

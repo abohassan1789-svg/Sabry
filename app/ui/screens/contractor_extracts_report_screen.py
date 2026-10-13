@@ -62,12 +62,13 @@ PERMISSION_BASE = "contracting.contractor_extracts_report"
 SETTINGS_KEY = "contractor_extracts_report/columns"
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
-# The user's 18 columns in their order: (row key, header, kind).
+# The user's columns in their order: (row key, header, kind).
 COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("extract_date", "تاريخ\nالمستخلص", TEXT_COL),
     ("company_name", "اسم الشركة", TEXT_COL),
     ("project_name", "اسم المشروع", TEXT_COL),
     ("contractor_name", "اسم المقاول", TEXT_COL),
+    ("contract_label", "العقد", TEXT_COL),  # رقم — اسم (2026-10-13)
     ("extract_no", "رقم المستخلص", TEXT_COL),
     ("works_value", "إجمالي\nالمستخلص", AMOUNT_COL),
     ("vat_pct", "نسبة\nالضريبة", RATE_COL),
@@ -90,10 +91,10 @@ DEFAULT_COLUMNS = tuple(key for key in COLUMN_KEYS if KIND[key] != RATE_COL)
 
 # The column chooser's groups, as in the mockups.
 COLUMN_GROUPS = (
-    ("بيانات المستخلص", COLUMN_KEYS[:5]),
-    ("الأعمال", COLUMN_KEYS[5:8]),
-    ("الاستقطاعات", COLUMN_KEYS[8:17]),
-    ("الصافي", COLUMN_KEYS[17:]),
+    ("بيانات المستخلص", COLUMN_KEYS[:6]),
+    ("الأعمال", COLUMN_KEYS[6:9]),
+    ("الاستقطاعات", COLUMN_KEYS[9:18]),
+    ("الصافي", COLUMN_KEYS[18:]),
 )
 
 # (row key, card title); the last card is the dark one.
@@ -153,7 +154,8 @@ class ContractorExtractsReportScreen(ContractingReportBase):
         self.group_mode = GROUP_CONTRACTOR
         self.collapsed: set[Any] = set()
         self.row_kinds: list[tuple[str, Any]] = []
-        self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS)
+        self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS,
+                                            added=("contract_label",))
         super().__init__(service or ContractorExtractsReportService(), parent)
 
     # -- layout ------------------------------------------------------------------------

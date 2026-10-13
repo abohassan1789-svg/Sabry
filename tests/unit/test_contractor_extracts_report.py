@@ -49,7 +49,7 @@ from app.ui.screens.contractor_extracts_report_screen import (
 def _extract(extract_id, date, company_id, company, project_id, project, contractor_id, contractor, works,
              advance="10", withholding="1", social="0.365", other="0"):
     return {"extract_id": extract_id, "extract_no": f"A-H/CT-100{contractor_id}/EX-0{extract_id}",
-            "extract_date": datetime.date(*date), "contract_id": contractor_id, "contract_no": "",
+            "extract_date": datetime.date(*date), "contract_id": contractor_id, "contract_no": f"A-H/CT-100{contractor_id}",
             "company_id": company_id, "company_name": company, "project_id": project_id, "project_name": project,
             "contractor_id": contractor_id, "contractor_name": contractor, "works_value": Decimal(works),
             "vat_pct": Decimal("14"), "advance_payment_pct": Decimal(advance),
@@ -58,7 +58,8 @@ def _extract(extract_id, date, company_id, company, project_id, project, contrac
 
 
 EXTRACTS = [
-    _extract(1, (2026, 2, 15), 10, "الأفق للتطوير", 11, "برج الأفق", 1, "م. أحمد عبد الرحمن", "456000"),
+    {**_extract(1, (2026, 2, 15), 10, "الأفق للتطوير", 11, "برج الأفق", 1, "م. أحمد عبد الرحمن", "456000"),
+     "contract_name": "أعمال الخرسانة"},
     _extract(2, (2026, 2, 28), 10, "الأفق للتطوير", 11, "برج الأفق", 2, "الصفا للكهرباء", "185000",
              advance="15", withholding="3", social="2.8", other="2500"),
     _extract(3, (2026, 3, 10), 20, "الدلتا العقارية", 21, "كمبوند الياسمين", 3, "البناء الحديث", "620000",
@@ -181,11 +182,18 @@ def _visible(screen):
 
 def test_columns_are_the_users_in_order(screen):
     headers = [screen.table.horizontalHeaderItem(i).text().replace("\n", " ") for i in range(len(COLUMNS))]
-    assert headers == ["تاريخ المستخلص", "اسم الشركة", "اسم المشروع", "اسم المقاول", "رقم المستخلص",
+    assert headers == ["تاريخ المستخلص", "اسم الشركة", "اسم المشروع", "اسم المقاول", "العقد", "رقم المستخلص",
                        "إجمالي المستخلص", "نسبة الضريبة", "صافي الأعمال", "نسبة الدفعة المقدمة",
                        "قيمة الدفعة المقدمة", "نسبة ضرائب الخصم", "قيمة ضرائب الخصم", "نسبة تأمين الأعمال",
                        "قيمة تأمين الأعمال", "نسبة التأمينات الاجتماعية", "قيمة التأمينات الاجتماعية",
                        "خصومات أخرى", "صافي المستخلص"]
+
+
+def test_contract_column_is_number_and_name(screen):
+    """«العقد» (2026-10-13): «رقم — اسم», the number alone when the contract has no name."""
+    column = COLUMN_KEYS.index("contract_label")
+    texts = {screen.table.item(row, column).text() for row in range(screen.table.rowCount() - 1)}
+    assert {"A-H/CT-1001 — أعمال الخرسانة", "A-H/CT-1002"} <= texts
 
 
 def test_the_eight_cards(screen):
@@ -199,8 +207,8 @@ def test_the_eight_cards(screen):
 
 def test_default_columns_are_the_mockups_and_rates_are_hidden(screen):
     assert _visible(screen) == list(DEFAULT_COLUMNS)
-    assert "vat_pct" not in DEFAULT_COLUMNS and len(DEFAULT_COLUMNS) == 13
-    assert screen.columns_count.text() == "ظاهر 13 من 18 عمود"
+    assert "vat_pct" not in DEFAULT_COLUMNS and len(DEFAULT_COLUMNS) == 14
+    assert screen.columns_count.text() == "ظاهر 14 من 19 عمود"
 
 
 def test_the_chooser_has_a_checkbox_per_column(screen):
@@ -210,7 +218,7 @@ def test_the_chooser_has_a_checkbox_per_column(screen):
     assert "vat_pct" in _visible(screen)
     screen.chooser.boxes["company_name"].setChecked(False)
     assert "company_name" not in _visible(screen)
-    assert screen.columns_count.text() == "ظاهر 13 من 18 عمود"
+    assert screen.columns_count.text() == "ظاهر 14 من 19 عمود"
     screen.chooser.all_button.click()
     assert _visible(screen) == list(COLUMN_KEYS)
     screen.chooser.none_button.click()
@@ -224,9 +232,14 @@ def test_the_column_choice_is_kept_for_next_time(qt_app, settings):
     first.set_visible_columns(["extract_no", "works_value", "net"])
     first.close()
     second = ContractorExtractsReportScreen(FakeService(), settings=settings)
-    assert _visible(second) == ["extract_no", "works_value", "net"]
+    # «العقد» came after the choice was saved: it shows once (2026-10-13) ...
+    assert _visible(second) == ["contract_label", "extract_no", "works_value", "net"]
     assert second.chooser.boxes["net"].isChecked() and not second.chooser.boxes["vat_pct"].isChecked()
+    second.set_visible_columns(["extract_no", "works_value", "net"])
     second.close()
+    third = ContractorExtractsReportScreen(FakeService(), settings=settings)
+    assert _visible(third) == ["extract_no", "works_value", "net"]  # ... and hiding it sticks
+    third.close()
 
 
 def test_grouped_by_contractor_by_default(screen):

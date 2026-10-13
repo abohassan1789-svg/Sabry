@@ -1,7 +1,8 @@
 """Data and arithmetic for تقرير مستخلصات المقاولين (نموذج 6, 2026-09-26).
 
 One row per extract, with the user's columns: تاريخ المستخلص، اسم الشركة، اسم
-المشروع، اسم المقاول، رقم المستخلص، إجمالي المستخلص، نسبة الضريبة، صافي الأعمال،
+المشروع، اسم المقاول، العقد (``contract_label``: «رقم — اسم», 2026-10-13)، رقم
+المستخلص، إجمالي المستخلص، نسبة الضريبة، صافي الأعمال،
 نسبة وقيمة كل من الدفعة المقدمة وضرائب الخصم وتأمين الأعمال والتأمينات
 الاجتماعية، خصومات أخرى، صافي المستخلص.
 
@@ -15,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.services.contractor_contract_service import to_decimal
+from app.services.contractor_contract_service import contract_label, to_decimal
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService
 from app.services.contractor_extract_service import extract_amounts
 
@@ -36,7 +37,8 @@ GROUP_KEYS = {
 def report_row(extract: dict[str, Any]) -> dict[str, Any]:
     """One report line: the extract's own fields, its rates and every computed amount."""
     amounts = extract_amounts(extract)
-    row = {**extract, **{key: to_decimal(extract.get(key)) for key in RATE_KEYS}}
+    row = {**extract, "contract_label": contract_label(extract),
+           **{key: to_decimal(extract.get(key)) for key in RATE_KEYS}}
     row.update({key: amounts[key] for key in AMOUNT_KEYS})
     return row
 
@@ -82,7 +84,7 @@ class ContractorExtractsReportService(ContractorContractsReportService):
         extracts = self._db.fetch_all(
             "SELECT x.extract_id, x.extract_no, x.extract_date, x.contract_id, x.works_value, x.vat_pct, "
             "x.advance_payment_pct, x.withholding_tax_pct, x.works_insurance_pct, x.social_insurance_pct, "
-            "x.other_deductions, k.contract_no, k.contractor_id, d.contractor_name, k.project_id, "
+            "x.other_deductions, k.contract_no, k.contract_name, k.contractor_id, d.contractor_name, k.project_id, "
             "p.project_name, p.company_id, c.company_name "
             "FROM contractor_extracts x "
             "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
