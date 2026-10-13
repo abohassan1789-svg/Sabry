@@ -3482,6 +3482,7 @@ CREATE TRIGGER trg_company_projects_set_updated_at BEFORE UPDATE ON public.compa
 CREATE TABLE IF NOT EXISTS public.contractor_contracts (
     contract_id integer GENERATED ALWAYS AS IDENTITY NOT NULL,
     contract_no character varying(30) NOT NULL,
+    contract_name character varying(200),                  -- اسم العقد (اختياري)
     contract_date date DEFAULT CURRENT_DATE NOT NULL,
     contractor_id integer NOT NULL,
     project_id integer NOT NULL,
@@ -3832,3 +3833,6 @@ DO $$ BEGIN
       ALTER COLUMN social_insurance_pct TYPE numeric(6,3);
   END IF;
 END $$;
+
+-- 2026-10-13 (user): «اسم العقد» on the contracts screen — optional, old contracts stay blank.
+ALTER TABLE public.contractor_contracts ADD COLUMN IF NOT EXISTS contract_name character varying(200);

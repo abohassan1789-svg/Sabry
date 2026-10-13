@@ -31,7 +31,7 @@ from decimal import Decimal
 from typing import Any
 
 from PySide6.QtCore import QDate, QRegularExpression, Qt, QTimer
-from PySide6.QtGui import QRegularExpressionValidator
+from PySide6.QtGui import QKeySequence, QRegularExpressionValidator, QShortcut
 from PySide6.QtWidgets import (
     QComboBox,
     QDateEdit,
@@ -71,6 +71,7 @@ from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
 from app.ui.common.live_lists import notify_data_changed
 from app.ui.dialogs.contract_attachments_dialog import ContractAttachmentsDialog
+from app.ui.dialogs.contractor_contract_picker import ContractorContractPickerDialog
 
 PERMISSION_BASE = "contracting.contractor_contracts"
 BLUE = "#0369A1"
@@ -176,6 +177,9 @@ class ContractForm(QWidget):
         self._loading = False
 
         self.contract_no = self._line_edit("رقم العقد", ltr=True)
+        # اسم العقد (user, 2026-10-13): optional.
+        self.contract_name = self._line_edit("اسم العقد (اختياري)")
+        self.contract_name.setMaxLength(200)
         self.contract_date = QDateEdit()
         self.contract_date.setCalendarPopup(True)
         self.contract_date.setDisplayFormat("yyyy-MM-dd")
@@ -310,8 +314,10 @@ class ContractForm(QWidget):
         grid = QGridLayout()
         grid.setHorizontalSpacing(16)
         grid.setVerticalSpacing(10)
+        # Row 0 number / date / value, row 1 the name across, row 2 contractor / company / project.
         for index, (caption, editor) in enumerate(self._fields()):
-            grid.addWidget(self._labelled(caption, editor), index // 3, index % 3)
+            grid.addWidget(self._labelled(caption, editor), index // 3 + (index >= 3), index % 3)
+        grid.addWidget(self._labelled("اسم العقد", self.contract_name), 1, 0, 1, 3)
         for col in range(3):
             grid.setColumnStretch(col, 1)
         data.addLayout(grid)
@@ -336,12 +342,15 @@ class ContractForm(QWidget):
         grid.setHorizontalSpacing(10)
         grid.setVerticalSpacing(6)
         fields = dict(self._fields())
+        # Number beside the name and date beside the value: the same five rows as before
+        # «اسم العقد», so the panel still needs no vertical scroll.
         grid.addWidget(self._labelled("رقم العقد", fields["رقم العقد"]), 0, 0)
-        grid.addWidget(self._labelled("تاريخ العقد", fields["تاريخ العقد"]), 0, 1)
-        grid.addWidget(self._labelled("اسم المقاول", fields["اسم المقاول"]), 1, 0, 1, 2)
-        grid.addWidget(self._labelled("اسم الشركة", fields["اسم الشركة"]), 2, 0, 1, 2)
-        grid.addWidget(self._labelled("اسم المشروع", fields["اسم المشروع"]), 3, 0, 1, 2)
-        grid.addWidget(self._labelled("قيمة العقد (ج.م)", fields["قيمة العقد (ج.م)"]), 4, 0, 1, 2)
+        grid.addWidget(self._labelled("اسم العقد", self.contract_name), 0, 1)
+        grid.addWidget(self._labelled("تاريخ العقد", fields["تاريخ العقد"]), 1, 0)
+        grid.addWidget(self._labelled("قيمة العقد (ج.م)", fields["قيمة العقد (ج.م)"]), 1, 1)
+        grid.addWidget(self._labelled("اسم المقاول", fields["اسم المقاول"]), 2, 0, 1, 2)
+        grid.addWidget(self._labelled("اسم الشركة", fields["اسم الشركة"]), 3, 0, 1, 2)
+        grid.addWidget(self._labelled("اسم المشروع", fields["اسم المشروع"]), 4, 0, 1, 2)
         root.addLayout(grid)
         root.addSpacing(4)
         root.addLayout(self._rates_grid(headers=False))
@@ -395,6 +404,7 @@ class ContractForm(QWidget):
         self._loading = True
         try:
             self.contract_no.setText(str(record.get("contract_no") or ""))
+            self.contract_name.setText(str(record.get("contract_name") or ""))
             date = record.get("contract_date")
             if isinstance(date, (datetime.date, datetime.datetime)):
                 self.contract_date.setDate(QDate(date.year, date.month, date.day))
@@ -416,6 +426,7 @@ class ContractForm(QWidget):
         self._loading = True
         try:
             self.contract_no.clear()
+            self.contract_name.clear()
             self.contract_date.setDate(QDate.currentDate())
             self.contract_value.clear()
             for key in self.rates:
@@ -442,6 +453,7 @@ class ContractForm(QWidget):
     def data(self) -> dict[str, Any]:
         values = {
             "contract_no": self.contract_no.text(),
+            "contract_name": self.contract_name.text(),
             "contract_date": self.contract_date.date().toString("yyyy-MM-dd"),
             "contractor_id": self.contractor.currentData(),
             "project_id": self.project.currentData(),
@@ -475,7 +487,7 @@ class ContractForm(QWidget):
             self.contract_value.setText(_money(to_decimal(text)))
 
     def set_editing(self, editing: bool) -> None:
-        for editor in (self.contract_no, self.contract_value):
+        for editor in (self.contract_no, self.contract_name, self.contract_value):
             editor.setReadOnly(not editing)
         self.contract_date.setReadOnly(not editing)
         self.contract_date.setCalendarPopup(editing)
@@ -511,6 +523,8 @@ class ContractorContractsScreen(QWidget):
         self.setStyleSheet("QWidget { font-family: 'Segoe UI', 'Tahoma', 'Arial'; }")
         self.approval = ApprovalControls(self, PERMISSION_BASE, locked_when_approved=True)
         self._build_ui()
+        self.search_shortcut = QShortcut(QKeySequence("F1"), self)
+        self.search_shortcut.activated.connect(self.open_search)
         self.refresh_all()
         self.set_mode("view")
 
@@ -600,6 +614,7 @@ class ContractorContractsScreen(QWidget):
         self.delete_button = QPushButton("حذف")
         self.cancel_button = QPushButton("إلغاء")
         self.refresh_button = QPushButton("تحديث")
+        self.search_button = QPushButton("بحث (F1)")
         self.exit_button = QPushButton("خروج")
         buttons = [
             (self.new_button, QStyle.SP_FileIcon, "#1A7A3C", "#166534"),
@@ -608,6 +623,7 @@ class ContractorContractsScreen(QWidget):
             (self.delete_button, QStyle.SP_TrashIcon, "#DC2626", "#B91C1C"),
             (self.cancel_button, QStyle.SP_DialogCancelButton, "#6B7280", "#4B5563"),
             (self.refresh_button, QStyle.SP_BrowserReload, "#FFFFFF", "#F3F4F6"),
+            (self.search_button, QStyle.SP_FileDialogContentsView, "#0369A1", "#075985"),
             (self.exit_button, QStyle.SP_ArrowBack, "#374151", "#1F2937"),
         ]
         for button, icon, bg, hover in buttons:
@@ -666,6 +682,7 @@ class ContractorContractsScreen(QWidget):
         self.delete_button.clicked.connect(self.delete_record)
         self.cancel_button.clicked.connect(self.cancel_edit)
         self.refresh_button.clicked.connect(self.refresh_all)
+        self.search_button.clicked.connect(self.open_search)
         self.exit_button.clicked.connect(self.window().close)
         return bar
 
@@ -727,7 +744,9 @@ class ContractorContractsScreen(QWidget):
                 company_item.addChild(project_item)
                 self._tree_items[("project", project["project_id"])] = project_item
                 for contract in project["contracts"]:
-                    item = QTreeWidgetItem([f"📄  {contract['contract_no']}  —  {contract['contractor_name']}"
+                    name = str(contract.get("contract_name") or "").strip()
+                    item = QTreeWidgetItem([f"📄  {contract['contract_no']}  —  "
+                                            f"{name + '  —  ' if name else ''}{contract['contractor_name']}"
                                             f"{draft_suffix(contract)}"])
                     item.setData(0, Qt.UserRole,
                                  ("contract", contract["contract_id"], company["company_id"], project["project_id"]))
@@ -942,6 +961,11 @@ class ContractorContractsScreen(QWidget):
         top.addStretch(1)
         top.addWidget(date_label)
         column.addLayout(top)
+        name = str(contract.get("contract_name") or "").strip()
+        if name:
+            name_label = _caption(name, 13, BLUE)
+            name_label.setWordWrap(True)
+            column.addWidget(name_label)
         project = _caption(f"📁  {contract['project_name']}", 16, TEXT)
         company = _caption(f"🏢  {contract['company_name']}", 13, MUTED)
         column.addWidget(project)
@@ -969,6 +993,8 @@ class ContractorContractsScreen(QWidget):
         chips.addStretch(1)
         column.addLayout(chips)
 
+        # A named contract has one more line: grow the card instead of squeezing the value.
+        button.setMinimumHeight(max(170, column.sizeHint().height()))
         for label in button.findChildren(QLabel):
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
         value_row.setAttribute(Qt.WA_TransparentForMouseEvents)
@@ -1201,6 +1227,28 @@ class ContractorContractsScreen(QWidget):
         dialog.exec()
         self._refresh_attachment_count()
 
+    # -- «بحث» (F1) ----------------------------------------------------------------------------
+
+    def open_search(self) -> None:
+        """Find any contract by its number, date, contractor, company, project or name; open it."""
+        if self._busy():
+            return
+        try:
+            contracts = self.service.contracts()
+        except Exception as exc:
+            self._show_error("تعذّر تحميل العقود", exc)
+            return
+        dialog = ContractorContractPickerDialog(contracts, self)
+        if dialog.exec() != ContractorContractPickerDialog.Accepted or not dialog.selected:
+            return
+        if self.search_text.text().strip():
+            # The filter box could hide the chosen contract from the tree and the cards.
+            self.search_text.blockSignals(True)
+            self.search_text.clear()
+            self.search_text.blockSignals(False)
+            self.refresh_views()
+        self.load_contract(dialog.selected["contract_id"])
+
     # -- modes ---------------------------------------------------------------------------------
 
     def set_mode(self, mode: str) -> None:
@@ -1219,6 +1267,7 @@ class ContractorContractsScreen(QWidget):
         self.approval.update(editing, status, self.edit_button, self.delete_button)
         self.attachments_button.setEnabled(not editing and has_record)
         self.search_text.setEnabled(not editing)
+        self.search_button.setEnabled(not editing)
         self.contractor_picker.setEnabled(not editing)
         self.tabs.tabBar().setEnabled(not editing)
         self.mode_badge.setText({"view": "عرض", "new": "جديد", "edit": "تعديل"}.get(mode, mode))

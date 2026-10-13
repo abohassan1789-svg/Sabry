@@ -21,7 +21,7 @@ from decimal import Decimal
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QLabel
 
 from app.services.contractor_contract_service import (
     ContractError,
@@ -30,6 +30,7 @@ from app.services.contractor_contract_service import (
     next_contract_no_from,
     to_decimal,
 )
+from app.ui.dialogs.contractor_contract_picker import ALL, COLUMNS, ContractorContractPickerDialog
 from app.ui.screens import contractor_contracts_screen as screen_module
 from app.ui.screens.contractor_contracts_screen import (
     TAB_CONTRACTOR,
@@ -54,14 +55,15 @@ PROJECTS = {
 PROJECT_COMPANY = {10: 1, 11: 1, 20: 2}
 
 
-def _contract(contract_id, number, contractor_id, project_id, value, rates, status="draft"):
+def _contract(contract_id, number, contractor_id, project_id, value, rates, status="draft", name=None):
     company_id = PROJECT_COMPANY[project_id]
     project = next(p for p in PROJECTS[company_id] if p["project_id"] == project_id)
     company = next(c for c in COMPANIES if c["company_id"] == company_id)
     contractor = next(c for c in CONTRACTORS if c["contractor_id"] == contractor_id)
     adv, ins, tax, soc = rates
     return {
-        "contract_id": contract_id, "contract_no": number, "contract_date": datetime.date(2026, 9, 1),
+        "contract_id": contract_id, "contract_no": number, "contract_name": name,
+        "contract_date": datetime.date(2026, 9, 1),
         "contractor_id": contractor_id, "project_id": project_id, "contract_value": Decimal(value),
         "advance_payment_pct": Decimal(adv), "works_insurance_pct": Decimal(ins),
         "tax_discount_pct": Decimal(tax), "social_insurance_pct": Decimal(soc),
@@ -74,7 +76,7 @@ def _contract(contract_id, number, contractor_id, project_id, value, rates, stat
 
 CONTRACTS = {
     100: _contract(100, "A-H/CT-1001", 1, 11, "2500000", ("10", "5", "1", "2"), status="approved"),
-    101: _contract(101, "A-H/CT-1002", 2, 20, "4800000", ("15", "5", "1", "2")),
+    101: _contract(101, "A-H/CT-1002", 2, 20, "4800000", ("15", "5", "1", "2"), name="أعمال الخرسانة"),
     102: _contract(102, "A-H/CT-1003", 1, 10, "1200000", ("10", "10", "1", "2")),
 }
 
@@ -551,3 +553,123 @@ def test_attachments_dialog_may_modify_only_when_the_contract_may_be_edited(scre
     screen.load_contract(100)  # approved: locked for a non-admin
     screen.open_attachments()
     assert opened == [(101, "A-H/CT-1002", True), (100, "A-H/CT-1001", False)]
+
+
+# --- اسم العقد (2026-10-13) ------------------------------------------------------------------
+
+
+class _RecordingDb:
+    def __init__(self):
+        self.calls = []
+
+    def fetch_one(self, sql, params=None):
+        self.calls.append((sql, params))
+        return {"contract_id": 7} if sql.lstrip().startswith("INSERT") else None
+
+    def fetch_all(self, sql, params=None):
+        return []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, params))
+
+
+@pytest.mark.parametrize("typed,stored", [("  أعمال الحفر  ", "أعمال الحفر"), ("", None), ("   ", None)])
+def test_the_contract_name_is_optional_and_trimmed(monkeypatch, typed, stored):
+    monkeypatch.setattr("app.services.contractor_contract_service.approval.check_unlocked", lambda *a, **k: None)
+    monkeypatch.setattr("app.services.contractor_contract_service.approval.check_parents", lambda *a, **k: None)
+    db = _RecordingDb()
+    data = {"contract_no": "A-H/CT-1009", "contract_name": typed, "contract_date": "2026-10-13",
+            "contractor_id": 1, "project_id": 10, "contract_value": "1000", "advance_payment_pct": 0,
+            "works_insurance_pct": 5, "tax_discount_pct": 0, "social_insurance_pct": 0}
+    assert ContractorContractService(db).save_contract(data) == 7
+    sql, params = db.calls[-1]
+    assert "contract_name" in sql
+    assert params[1] == stored
+
+
+def test_both_forms_show_and_send_the_contract_name(screen):
+    screen.load_contract(101)
+    for form in screen.forms:
+        assert form.contract_name.text() == "أعمال الخرسانة"
+        assert form.contract_name.isReadOnly()
+    screen.edit_record()
+    assert not screen.tree_form.contract_name.isReadOnly()
+    screen.tree_form.contract_name.setText("أعمال المباني")
+    screen.save_record()
+    data, record_id = screen.service.saved[-1]
+    assert record_id == 101 and data["contract_name"] == "أعمال المباني"
+
+
+def test_a_new_contract_starts_with_an_empty_name(screen):
+    screen.load_contract(101)
+    screen.new_contract()
+    assert screen.tree_form.contract_name.text() == ""
+
+
+def test_the_name_shows_in_the_tree_and_on_the_card(screen):
+    assert "أعمال الخرسانة" in screen._tree_items[("contract", 101)].text(0)
+    assert screen._tree_items[("contract", 100)].text(0).count("—") == 1  # no name: unchanged
+    screen.load_contract(101)
+    texts = [label.text() for label in screen._cards[101].findChildren(QLabel)]
+    assert "أعمال الخرسانة" in texts
+
+
+def test_the_search_dialog_has_the_users_columns_in_order(qt_app):
+    dialog = ContractorContractPickerDialog(list(CONTRACTS.values()))
+    headers = [dialog.table.horizontalHeaderItem(i).text() for i in range(dialog.table.columnCount())]
+    assert headers == ["رقم العقد", "تاريخ العقد", "اسم المقاول", "اسم الشركة", "اسم المشروع", "اسم العقد"]
+    assert [label for _k, label in COLUMNS] == headers
+    assert dialog.table.rowCount() == 3
+    assert dialog.table.item(1, 5).text() == "أعمال الخرسانة"
+    assert dialog.table.item(1, 1).text() == "2026-09-01"
+
+
+def test_each_column_has_a_searchable_drop_list_that_narrows_the_table(qt_app):
+    dialog = ContractorContractPickerDialog(list(CONTRACTS.values()))
+    assert list(dialog.filters) == [key for key, _l in COLUMNS]
+    for combo in dialog.filters.values():
+        assert combo.itemText(0) == ALL
+        assert combo.property("_searchHooked")  # the program's searchable drop list
+    contractor = dialog.filters["contractor_name"]
+    contractor.setCurrentIndex(contractor.findText(CONTRACTS[100]["contractor_name"]))
+    assert {row["contract_id"] for row in dialog.visible_rows} == {100, 102}
+    project = dialog.filters["project_name"]
+    project.setCurrentIndex(project.findText(CONTRACTS[102]["project_name"]))
+    assert [row["contract_id"] for row in dialog.visible_rows] == [102]
+    assert dialog.count_label.text() == "عدد العقود: 1"
+    dialog.clear_filters()
+    assert len(dialog.visible_rows) == 3
+
+
+def test_the_name_drop_list_skips_blank_names(qt_app):
+    dialog = ContractorContractPickerDialog(list(CONTRACTS.values()))
+    names = dialog.filters["contract_name"]
+    assert [names.itemText(i) for i in range(names.count())] == [ALL, "أعمال الخرسانة"]
+    names.setCurrentIndex(1)
+    assert [row["contract_id"] for row in dialog.visible_rows] == [101]
+
+
+def test_f1_search_opens_the_picked_contract(screen, monkeypatch):
+    picked = {}
+
+    def fake_exec(dialog):
+        picked["rows"] = len(dialog.rows)
+        dialog.filters["contract_name"].setCurrentIndex(1)
+        dialog.accept_selected()
+        return ContractorContractPickerDialog.Accepted
+
+    monkeypatch.setattr(ContractorContractPickerDialog, "exec", fake_exec)
+    screen.search_text.setText("A-H/CT-1001")  # a filter that hides 101
+    screen.refresh_views()
+    screen.search_shortcut.activated.emit()
+    assert picked["rows"] == 3
+    assert screen.current_id == 101
+    assert screen.search_text.text() == ""
+    assert ("contract", 101) in screen._tree_items
+
+
+def test_search_is_disabled_while_editing(screen):
+    screen.load_contract(101)
+    assert screen.search_button.isEnabled()
+    screen.edit_record()
+    assert not screen.search_button.isEnabled()

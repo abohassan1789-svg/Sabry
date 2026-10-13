@@ -42,7 +42,7 @@ _CONTRACT_PATTERN = re.compile(r"^\s*A-H/CT-(\d+)\s*$", re.IGNORECASE)
 _CENT = Decimal("0.01")
 
 _CONTRACT_SELECT = (
-    "SELECT k.contract_id, k.contract_no, k.contract_date, k.contractor_id, k.project_id, "
+    "SELECT k.contract_id, k.contract_no, k.contract_name, k.contract_date, k.contractor_id, k.project_id, "
     "k.contract_value, k.advance_payment_pct, k.works_insurance_pct, k.tax_discount_pct, "
     "k.social_insurance_pct, k.status, "
     "d.contractor_code, d.contractor_name, "
@@ -128,7 +128,7 @@ class ContractorContractService:
     def contracts(self, keyword: str = "", contractor_id: Any = None) -> list[dict[str, Any]]:
         """Contracts with their contractor / project / company, newest number last.
 
-        *keyword* matches the number, the contractor, the project or the company.
+        *keyword* matches the number, the name, the contractor, the project or the company.
         """
         where, params = [], []
         if contractor_id not in (None, ""):
@@ -137,7 +137,7 @@ class ContractorContractService:
         needle = _clean(keyword)
         if needle:
             where.append(
-                "concat_ws(' ', k.contract_no, d.contractor_code, d.contractor_name, "
+                "concat_ws(' ', k.contract_no, k.contract_name, d.contractor_code, d.contractor_name, "
                 "p.project_code, p.project_name, c.company_code, c.company_name) ILIKE %s"
             )
             params.append(f"%{needle}%")
@@ -236,17 +236,21 @@ class ContractorContractService:
         approval.check_parents(self._db, [(approval.CONTRACTOR, data["contractor_id"]),
                                           (approval.PROJECT, data["project_id"])])
 
-        params = [contract_no, data["contract_date"], data["contractor_id"], data["project_id"], value, *rates]
+        # اسم العقد is optional (user, 2026-10-13): blank is stored as NULL.
+        contract_name = _clean(data.get("contract_name"))[:200] or None
+        params = [contract_no, contract_name, data["contract_date"], data["contractor_id"], data["project_id"],
+                  value, *rates]
         if contract_id is None:
             row = self._db.fetch_one(
-                "INSERT INTO contractor_contracts (contract_no, contract_date, contractor_id, project_id, "
-                "contract_value, advance_payment_pct, works_insurance_pct, tax_discount_pct, social_insurance_pct) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING contract_id",
+                "INSERT INTO contractor_contracts (contract_no, contract_name, contract_date, contractor_id, "
+                "project_id, contract_value, advance_payment_pct, works_insurance_pct, tax_discount_pct, "
+                "social_insurance_pct) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING contract_id",
                 params,
             )
             return int(row["contract_id"])
         self._db.execute(
-            "UPDATE contractor_contracts SET contract_no = %s, contract_date = %s, contractor_id = %s, "
+            "UPDATE contractor_contracts SET contract_no = %s, contract_name = %s, contract_date = %s, "
+            "contractor_id = %s, "
             "project_id = %s, contract_value = %s, advance_payment_pct = %s, works_insurance_pct = %s, "
             "tax_discount_pct = %s, social_insurance_pct = %s WHERE contract_id = %s",
             params + [contract_id],
