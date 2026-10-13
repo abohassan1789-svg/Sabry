@@ -156,6 +156,7 @@ PAID_COLOR = "#15803D"
 DEDUCTION_BG = "#FEF6F6"
 DEDUCTION_COLOR = "#B91C1C"
 DEDUCTION_CARD_ROWS = 5  # types listed on the card; more fold into «باقي الأنواع»
+GENERAL_COLOR = "#0E7490"  # «دفعات عامة»: shown when «العقد» is chosen (user, 2026-10-13)
 
 
 def deduction_text(deduction: dict[str, Any]) -> str:
@@ -292,6 +293,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
     TITLE = "تقرير كشف حساب مقاول"
     ICON = "📒"
     PERMISSION_BASE = PERMISSION_BASE
+    CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13); the general payments get their own card
 
     def __init__(self, service: ContractorStatementReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -325,6 +327,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         chart_row = QHBoxLayout()
         chart_row.setSpacing(8)
         chart_row.addWidget(self.chart, 1)
+        chart_row.addWidget(self._build_general_card())
         chart_row.addWidget(self._build_deductions_card())
         root.addLayout(chart_row)
         root.addLayout(self._build_toolbar())
@@ -390,6 +393,79 @@ class ContractorStatementReportScreen(ContractingReportBase):
             self.card_hints[key] = hint
             layout.addWidget(card, 1)
         return layout
+
+    def _build_general_card(self) -> QFrame:
+        """«دفعات عامة» (user, 2026-10-13): with «العقد» chosen, the period's payments on no
+        extract of its contractor on its project — per نوع الحساب, their total and count.
+        They are in no line nor balance of the contract's statement."""
+        card = QFrame()
+        card.setObjectName("general_card")
+        card.setFixedSize(300, 150)
+        card.setStyleSheet(
+            "QFrame#general_card { background:#FFFFFF; border:1px solid #E5EAF0; "
+            f"border-top:3px solid {GENERAL_COLOR}; border-radius:9px; }}"
+            "QLabel { background:transparent; border:none; }"
+        )
+        column = QVBoxLayout(card)
+        column.setContentsMargins(12, 6, 12, 7)
+        column.setSpacing(2)
+        head = QHBoxLayout()
+        caption = QLabel("دفعات عامة")
+        caption.setStyleSheet(f"font-size:13px; font-weight:900; color:{GENERAL_COLOR};")
+        caption.setToolTip("دفعات المقاول على مشروع العقد من غير مستخلص — مش داخلة في رصيد العقد")
+        self.general_hint = QLabel("")
+        self.general_hint.setStyleSheet(f"font-size:11px; font-weight:700; color:{MUTED};")
+        head.addWidget(caption)
+        head.addStretch(1)
+        head.addWidget(self.general_hint)
+        column.addLayout(head)
+        self.general_grid = QGridLayout()
+        self.general_grid.setHorizontalSpacing(8)
+        self.general_grid.setVerticalSpacing(1)
+        self.general_grid.setColumnStretch(0, 1)  # the type's name keeps its whole width
+        column.addLayout(self.general_grid)
+        column.addStretch(1)
+        total = QHBoxLayout()
+        name = QLabel("الإجمالي")
+        name.setStyleSheet(f"font-size:12px; font-weight:900; color:{GENERAL_COLOR};")
+        self.general_total = QLabel("0.00")
+        self.general_total.setAlignment(Qt.AlignLeft | Qt.AlignAbsolute | Qt.AlignVCenter)
+        self.general_total.setStyleSheet(f"font-size:15px; font-weight:900; color:{GENERAL_COLOR};")
+        total.addWidget(name)
+        total.addStretch(1)
+        total.addWidget(self.general_total)
+        column.addLayout(total)
+        self.general_values: dict[str, QLabel] = {}
+        self.general_card = card
+        card.setVisible(False)
+        return card
+
+    def _fill_general_card(self, general: dict[str, Any] | None) -> None:
+        self.general_card.setVisible(general is not None)
+        while self.general_grid.count():
+            widget = self.general_grid.takeAt(0).widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self.general_values = {}
+        general = general or {}
+        rows = general.get("types") or []
+        if not rows:
+            empty = QLabel("مفيش دفعات عامة في الفترة دي")
+            empty.setStyleSheet(f"font-size:12px; font-weight:700; color:{MUTED};")
+            self.general_grid.addWidget(empty, 0, 0, 1, 2)
+        for row, (kind, amount) in enumerate(rows):
+            name = QLabel(kind)
+            name.setStyleSheet(f"font-size:12px; font-weight:800; color:{TEXT};")
+            value = QLabel(_money(amount))
+            value.setAlignment(Qt.AlignLeft | Qt.AlignAbsolute | Qt.AlignVCenter)
+            value.setStyleSheet(f"font-size:12px; font-weight:900; color:{TEXT};")
+            self.general_grid.addWidget(name, row, 0)
+            self.general_grid.addWidget(value, row, 1)
+            self.general_values[kind] = value
+        self.general_total.setText(_money(general.get("total") or 0))
+        count = general.get("count") or 0
+        self.general_hint.setText(f"{count} دفعات" if count else "")
 
     def _build_deductions_card(self) -> QFrame:
         """الخصومات الأخرى في الفترة, per type (user, 2026-10-11)."""
@@ -517,7 +593,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
 
     def _update_count(self) -> None:
         totals = self._account_statement()["totals"]
-        who = "كل المقاولين — " if self.filters()["contractor_id"] is None else ""
+        who = "كل المقاولين — " if self._everyone() else ""
         self.count_label.setText(f"{who}{TAB_TITLES[self.account]}: {totals['extracts_count']} مستخلصات · "
                                  f"{totals['payments_count']} دفعات")
 
@@ -539,6 +615,11 @@ class ContractorStatementReportScreen(ContractingReportBase):
         self.deductions_total.setText(f"إجمالي الخصومات: {_money(total)}")
 
     # -- filters -----------------------------------------------------------------------
+
+    def _everyone(self) -> bool:
+        """«الكل» in المقاول with no contract chosen: the statement is every contractor's."""
+        filters = self.filters()
+        return filters["contractor_id"] is None and filters.get("contract_id") is None
 
     def load_choices(self) -> None:
         super().load_choices()
@@ -587,6 +668,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
             + (f" · حتى {date_text(filters['date_to'])}" if filters["date_to"] else ""))
         self.card_hints["withholding"].setText(f"{withholding['extracts_count']} مستخلصات · للعرض فقط")
         self._fill_deductions_card(self.statement.get("deductions") or {})
+        self._fill_general_card(self.statement.get("general_payments"))
         self._update_deductions_button()
         self._update_count()
         self.chart.set_statement(self.statement)
@@ -607,7 +689,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         self.row_kinds = []
         statement = self._account_statement()
         date_from = self.filters()["date_from"]
-        cards = "بطاقات كل المقاولين" if self.contractor_combo.currentData() is None else "بطاقة المقاول"
+        cards = "بطاقات كل المقاولين" if self._everyone() else "بطاقة المقاول"
         caption = (f"رصيد أول المدة — {TAB_TITLES[self.account]} قبل {date_text(date_from)}" if date_from
                    else f"رصيد أول المدة — {CARD_FIELD[self.account]} في {cards}")
         self._add_label_row(ROW_OPENING, caption, {"balance": statement["opening"]}, OPENING_BG)

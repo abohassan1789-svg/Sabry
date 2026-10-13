@@ -31,6 +31,7 @@ from app.services.contractor_statement_report_service import (
     build_statement,
     contract_advance,
     empty_statement,
+    general_payments,
     withholding_total,
 )
 from app.ui.screens.contractor_statement_report_screen import (
@@ -180,6 +181,7 @@ def test_payment_text():
 class FakeService:
     def __init__(self):
         self.last_filters = None
+        self.contract_calls = []
 
     def company_choices(self):
         return [{"company_id": 10, "company_code": "C10", "company_name": "الأفق للتطوير"}]
@@ -191,15 +193,26 @@ class FakeService:
         return [{"contractor_id": 1, "contractor_code": "D1", "contractor_name": NAME},
                 {"contractor_id": 2, "contractor_code": "D2", "contractor_name": "الصفا للكهرباء"}]
 
+    def contract_choices(self, company_id=None, project_id=None, contractor_id=None):
+        self.contract_calls.append((company_id, project_id, contractor_id))
+        if contractor_id not in (None, 1):
+            return []
+        return [{"contract_id": 100, "contract_label": "A-H/CT-1001 — أعمال الخرسانة"}]
+
     def statement(self, **filters):
         self.last_filters = filters
         if filters["contractor_id"] not in (None, 1):  # None = «الكل»: here, the one contractor with movements
             return empty_statement()
         payments = PAYMENTS + [WORKS_PAYMENT, ADVANCE_PAID]
+        general = None
+        if filters.get("contract_id") is not None:  # «العقد»: the general payments go to their card
+            general = general_payments([p for p in payments if not p["extract_no"]],
+                                       filters["date_from"], filters["date_to"])
+            payments = [p for p in payments if p["extract_no"]]
         accounts = build_accounts(CARD, EXTRACTS, payments, filters["date_from"], filters["date_to"])
         return _with_accounts(accounts, contract_advance(CONTRACTS, EXTRACTS, filters["date_to"], payments),
                               withholding_total(CARD["withholding_tax_amount"], EXTRACTS,
-                                                filters["date_from"], filters["date_to"]))
+                                                filters["date_from"], filters["date_to"]), general)
 
 
 @pytest.fixture(scope="module")
@@ -570,3 +583,60 @@ def test_service_reads_each_extracts_deduction_lines():
     sql, params = next((q, p) for q, p in db.queries if "contractor_extract_deductions" in q)
     assert "ANY(%s)" in sql and params == [[2]]
     assert statement["deductions"]["types"] == [("غرامة تأخير", Decimal("600.00")), ("مياه وكهرباء", Decimal("400.00"))]
+
+
+# -- «العقد» (user, 2026-10-13) --------------------------------------------------------------
+
+
+def test_general_payments_card_sums_the_period_per_type():
+    general = general_payments([PAYMENTS[0], PAYMENTS[2], WORKS_PAYMENT, ADVANCE_PAID])
+    assert general["count"] == 4 and general["total"] == Decimal("235000.00")
+    assert general["types"] == [("رصيد جاري", Decimal("80000.00")), ("تأمين أعمال", Decimal("5000.00")),
+                                ("دفعة مقدمة", Decimal("150000.00"))]
+    in_period = general_payments([PAYMENTS[0], PAYMENTS[2], WORKS_PAYMENT, ADVANCE_PAID], FROM,
+                                 datetime.date(2026, 3, 31))
+    assert in_period["count"] == 1 and in_period["types"] == [("رصيد جاري", Decimal("50000.00"))]
+
+
+def test_the_general_card_shows_only_with_a_contract(screen):
+    assert screen.contract_combo is not None
+    assert [screen.contract_combo.itemData(i) for i in range(screen.contract_combo.count())] == [None, 100]
+    assert not screen.general_card.isVisibleTo(screen)
+    screen.contract_combo.setCurrentIndex(1)
+    screen.run_report()
+    assert screen.service.last_filters["contract_id"] == 100
+    assert screen.general_card.isVisibleTo(screen)
+    assert screen.general_total.text() == "235,000.00" and screen.general_hint.text() == "4 دفعات"
+    assert screen.general_values["رصيد جاري"].text() == "80,000.00"
+    # the table: the contract's two extracts and the payment on EX-01 only
+    assert screen.row_kinds == [ROW_OPENING, ROW_EXTRACT, ROW_PAYMENT, ROW_EXTRACT, ROW_TOTAL]
+    assert all(_cell(screen, row, "contract_label") == "A-H/CT-1001 — أعمال الخرسانة" for row in (1, 2, 3))
+    screen.contract_combo.setCurrentIndex(0)
+    screen.run_report()
+    assert not screen.general_card.isVisibleTo(screen)
+
+
+def test_a_chosen_contract_reads_as_one_contractor(screen):
+    screen.contractor_combo.setCurrentIndex(0)  # «الكل»
+    screen.run_report()
+    assert "كل المقاولين" in screen.count_label.text()
+    screen.contract_combo.setCurrentIndex(screen.contract_combo.findData(100))
+    screen.run_report()
+    assert "كل المقاولين" not in screen.count_label.text()
+    assert "بطاقة المقاول" in _cell(screen, 0, "date")
+
+
+def test_service_with_a_contract():
+    from app.services.contractor_statement_report_service import ContractorStatementReportService
+
+    db = _Db()
+    statement = ContractorStatementReportService(db).statement(contractor_id=1, contract_id=7)
+    sqls = [sql for sql, _params in db.queries]
+    extracts_sql = next(sql for sql in sqls if "FROM contractor_extracts x" in sql)
+    payments_sql = next(sql for sql in sqls if "FROM contractor_payments y" in sql and "x.extract_no" in sql)
+    assert "k.contract_id = %s" in extracts_sql
+    assert "x.contract_id = %s" in payments_sql  # a payment's contract is its extract's
+    general_sql, general_params = next((sql, p) for sql, p in db.queries if "y.extract_id IS NULL" in sql)
+    assert "k.contract_id = %s" in general_sql and general_params == [7]
+    assert statement["general_payments"] == {"count": 0, "total": Decimal("0"), "types": []}
+    assert ContractorStatementReportService(_Db()).statement(contractor_id=1)["general_payments"] is None

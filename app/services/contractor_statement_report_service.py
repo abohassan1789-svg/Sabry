@@ -42,6 +42,13 @@ any balance. It starts on the card's «ضرائب الخصم والإضافة» 
 ضريبة الخصم (card 36,000 + extracts 4,000 = 40,000). Extracts before «من» go into
 its رصيد أول المدة, those after «إلى» are left out.
 
+«العقد» (user, 2026-10-13): with a contract chosen, the lines are its extracts and the
+payments made on them; the contractor's card still opens every statement. Payments on
+no extract (دفعات عامة) of that contractor on the contract's project leave the table
+for a card of their own (``general_payments``, the period's total, count and amount
+per نوع الحساب). «المصروف فعلاً» is then the contract's share of the دفعات مقدمة, split
+as تقرير العقود splits them.
+
 الخصومات الأخرى بالتفصيل (user, 2026-10-11): each extract line carries its
 ``deductions`` (نوع الخصم، السبب، المبلغ; their sum is the extract's
 «خصومات أخرى», already inside صافي المستخلص, so no balance changes).
@@ -51,11 +58,13 @@ its رصيد أول المدة, those after «إلى» are left out.
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 from typing import Any
 
 from app.services.contractor_contract_service import contract_label, to_decimal
 from app.services.contractor_payment_service import (
     ACCOUNT_OPENING,
+    ACCOUNT_TYPES,
     ADVANCE_PAYMENT,
     EXTRACT_ACCOUNT_TYPES,
     CURRENT_BALANCE,
@@ -239,12 +248,34 @@ def contract_advance(contracts: list[dict[str, Any]], extracts: list[dict[str, A
     }
 
 
+def general_payments(payments: list[dict[str, Any]], date_from: Any = None,
+                     date_to: Any = None) -> dict[str, Any]:
+    """The «دفعات عامة» card: ``{count, total, types}`` of the period's *payments*, ``types``
+    being ``(نوع الحساب, amount)`` in the screens' order, the types with none left out."""
+    by_type: dict[str, Decimal] = {}
+    count = 0
+    for payment in payments:
+        day = _day(payment.get("payment_date"))
+        if day is not None and ((date_from is not None and day < date_from)
+                                or (date_to is not None and day > date_to)):
+            continue
+        kind = payment.get("account_type") or CURRENT_BALANCE
+        by_type[kind] = by_type.get(kind, ZERO) + _money(to_decimal(payment.get("amount")))
+        count += 1
+    order = list(ACCOUNT_TYPES) + sorted(kind for kind in by_type if kind not in ACCOUNT_TYPES)
+    types = [(kind, by_type[kind]) for kind in order if kind in by_type]
+    return {"count": count, "total": sum((amount for _kind, amount in types), ZERO), "types": types}
+
+
 def _with_accounts(accounts: dict[str, dict[str, Any]], contracts: dict[str, Any],
-                   withholding: dict[str, Any]) -> dict[str, Any]:
-    """The رصيد جاري statement at the top (``opening``/``lines``/``totals``), plus every type's."""
+                   withholding: dict[str, Any], general: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The رصيد جاري statement at the top (``opening``/``lines``/``totals``), plus every type's.
+
+    ``general_payments`` is the «دفعات عامة» card, ``None`` when no contract is chosen."""
     statement = dict(accounts[CURRENT_BALANCE])
     statement.update(accounts=accounts, timeline=account_timeline(accounts), contracts=contracts,
-                     withholding=withholding, deductions=deductions_summary(accounts[CURRENT_BALANCE]["lines"]))
+                     withholding=withholding, deductions=deductions_summary(accounts[CURRENT_BALANCE]["lines"]),
+                     general_payments=general)
     return statement
 
 
@@ -256,12 +287,14 @@ class ContractorStatementReportService(ContractorContractsReportService):
     """The filter choices are the contracts report's; no contractor (``None``) = «الكل»."""
 
     def statement(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
-                  project_id: Any = None, contractor_id: Any = None) -> dict[str, Any]:
+                  project_id: Any = None, contractor_id: Any = None, contract_id: Any = None) -> dict[str, Any]:
         everyone = contractor_id in (None, "")
+        one_contract = contract_id not in (None, "")
         where, params = ["TRUE"], []
         if not everyone:
             where, params = ["k.contractor_id = %s"], [contractor_id]
-        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id)):
+        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id),
+                              ("k.contract_id = %s", contract_id)):
             if value not in (None, ""):
                 where.append(clause)
                 params.append(value)
@@ -288,7 +321,8 @@ class ContractorStatementReportService(ContractorContractsReportService):
             if row is None:
                 return empty_statement()
         contracts = self._db.fetch_all(
-            "SELECT k.contract_id, k.contract_value, k.advance_payment_pct FROM contractor_contracts k "
+            "SELECT k.contract_id, k.contractor_id, k.project_id, k.contract_value, k.advance_payment_pct "
+            "FROM contractor_contracts k "
             "JOIN company_projects p ON p.project_id = k.project_id "
             "WHERE k.status = 'approved' AND " + " AND ".join(where),
             params,
@@ -306,8 +340,9 @@ class ContractorStatementReportService(ContractorContractsReportService):
             params,
         )
         self._attach_deductions(extracts)
+        # A payment's contract is its extract's: with «العقد» chosen, the general ones drop out.
         payment_where = [w.replace("k.contractor_id", "y.contractor_id").replace("k.project_id", "y.project_id")
-                         for w in where]
+                         .replace("k.contract_id", "x.contract_id") for w in where]
         payments = self._db.fetch_all(
             "SELECT y.payment_id, y.payment_date, y.amount, y.payment_method, y.reference_no, y.extract_id, "
             "y.account_type, "
@@ -321,8 +356,27 @@ class ContractorStatementReportService(ContractorContractsReportService):
             params,
         )
         accounts = build_accounts(row, extracts, payments, date_from, date_to)
-        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to, payments),
-                              withholding_total(row.get("withholding_tax_amount"), extracts, date_from, date_to))
+        general = None
+        advance_payments = payments
+        if one_contract:
+            general = general_payments(self._general_payments(contract_id), date_from, date_to)
+            shares = self.advance_allocation(contracts).get(contracts[0]["contract_id"], []) if contracts else []
+            advance_payments = [{"amount": p["share"], "payment_date": p["payment_date"],
+                                 "account_type": ADVANCE_PAYMENT} for p in shares]
+        return _with_accounts(accounts, contract_advance(contracts, extracts, date_to, advance_payments),
+                              withholding_total(row.get("withholding_tax_amount"), extracts, date_from, date_to),
+                              general)
+
+    def _general_payments(self, contract_id: Any) -> list[dict[str, Any]]:
+        """The approved payments on no extract of the contract's contractor on its project."""
+        return self._db.fetch_all(
+            "SELECT y.payment_id, y.payment_date, y.amount, y.account_type "
+            "FROM contractor_payments y "
+            "JOIN contractor_contracts k ON k.contractor_id = y.contractor_id AND k.project_id = y.project_id "
+            "WHERE k.contract_id = %s AND y.extract_id IS NULL AND y.status = 'approved' "
+            "ORDER BY y.payment_date, y.payment_id",
+            [contract_id],
+        )
 
     def _attach_deductions(self, extracts: list[dict[str, Any]]) -> None:
         """Each extract's «خصومات أخرى» lines, in their order, as ``deductions``."""

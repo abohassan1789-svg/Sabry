@@ -422,10 +422,9 @@ def test_the_contract_list_follows_the_other_filters(screen):
     assert screen.service.contract_calls[-1] == (10, 12, 1)
 
 
-def test_reports_without_the_flag_have_no_contract_filter():
-    from app.ui.screens.contractor_statement_report_screen import ContractorStatementReportScreen
+def test_the_dashboard_has_no_contract_filter():
     from app.ui.screens.contractors_dashboard_screen import ContractorsDashboardScreen
-    assert not ContractorStatementReportScreen.CONTRACT_FILTER and not ContractorsDashboardScreen.CONTRACT_FILTER
+    assert not ContractorsDashboardScreen.CONTRACT_FILTER  # the user kept it out (2026-10-13)
 
 
 class _Db:
