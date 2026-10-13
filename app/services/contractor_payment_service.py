@@ -132,7 +132,8 @@ def _same(a: Any, b: Any) -> bool:
 
 def with_net(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Catalog rows plus ``net`` (صافي المستخلص), ``remaining`` (net − its رصيد جاري payments)
-    and what it held back for each insurance (``works_insurance``, ``social_insurance``)."""
+    and what it held back for each insurance (``works_insurance``, ``social_insurance``) and for
+    the contract's advance (``advance_deducted``)."""
     out = []
     for row in rows:
         amounts = extract_amounts(row)
@@ -140,6 +141,7 @@ def with_net(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         paid = to_decimal(row.get("paid"))
         out.append(dict(row, net=net, paid=paid, remaining=net - paid,
                         works_insurance=amounts["works_insurance"], social_insurance=amounts["social_insurance"],
+                        advance_deducted=amounts["advance_payment"],
                         paid_works_insurance=to_decimal(row.get("paid_works_insurance")),
                         paid_social_insurance=to_decimal(row.get("paid_social_insurance"))))
     return out
@@ -244,17 +246,23 @@ def project_balance(catalog: list[dict[str, Any]], general: dict[tuple, Any], co
 
 
 def advance_balance_of(contracts: list[dict[str, Any]], advance_paid: dict[tuple, Any], contractor_id: Any,
-                       project_id: Any) -> dict[str, Decimal]:
+                       project_id: Any, catalog: list[dict[str, Any]] | None = None) -> dict[str, Decimal]:
     """دفعة مقدمة on a project: the contractor's approved contracts there grant
-    قيمة العقد × نسبة المقدمة (``net``); ``paid`` = the approved دفعات مقدمة on the project,
-    with or without an extract (*advance_paid* maps ``(contractor_id, project_id)`` to their total)."""
+    قيمة العقد × نسبة المقدمة (``net``). ``paid`` = what already came out of it (user, 2026-10-13,
+    like كشف حساب مقاول): the advance the approved extracts deducted (``deducted``, from the
+    *catalog*) + the approved دفعات مقدمة on the project with or without an extract (``paid_out``;
+    *advance_paid* maps ``(contractor_id, project_id)`` to their total)."""
     agreed = Decimal("0")
     for contract in contracts:
         if _same(contract["contractor_id"], contractor_id) and _same(contract["project_id"], project_id):
             agreed += to_decimal(contract.get("advance_agreed"))
-    paid = sum((to_decimal(amount) for (contractor, project), amount in advance_paid.items()
-                if _same(contractor, contractor_id) and _same(project, project_id)), Decimal("0"))
-    return {"net": agreed, "paid": paid, "remaining": agreed - paid}
+    paid_out = sum((to_decimal(amount) for (contractor, project), amount in advance_paid.items()
+                    if _same(contractor, contractor_id) and _same(project, project_id)), Decimal("0"))
+    deducted = sum((to_decimal(row.get("advance_deducted")) for row in catalog or ()
+                    if _same(row["contractor_id"], contractor_id) and _same(row["project_id"], project_id)),
+                   Decimal("0"))
+    paid = deducted + paid_out
+    return {"net": agreed, "paid": paid, "remaining": agreed - paid, "deducted": deducted, "paid_out": paid_out}
 
 
 def contractor_summary(catalog: list[dict[str, Any]], contractor_id: Any,

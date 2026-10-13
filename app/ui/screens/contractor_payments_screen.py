@@ -1204,7 +1204,9 @@ class ContractorPaymentsScreen(QWidget):
             # Out of the project's contracts' advance, with or without an extract (user, 2026-10-09).
             if self.project_id is None:
                 return None
-            on_project = advance_balance_of(self.contracts, self.advance_paid, self.contractor_id, self.project_id)
+            # Already out of it: the approved extracts' advance deductions + the دفعات مقدمة (2026-10-13).
+            on_project = advance_balance_of(self.contracts, self.advance_paid, self.contractor_id, self.project_id,
+                                            self.catalog)
             net, paid = on_project["net"], on_project["paid"]
             mine = (str(record.get("contractor_id")) == str(self.contractor_id)
                     and str(record.get("project_id")) == str(self.project_id))
@@ -1255,6 +1257,14 @@ class ContractorPaymentsScreen(QWidget):
         # An extract has no رصيد أول المدة of its own, nor has دفعة مقدمة.
         if self.extract_id is not None or self.fields.account.currentData() == ADVANCE_PAYMENT:
             self.tree_stats["opening"].setText("—")
+        # دفعة مقدمة: what «سابقاً» is made of — the extracts' deductions and the دفعات مقدمة.
+        tip = ""
+        if balance and self.fields.account.currentData() == ADVANCE_PAYMENT and self.project_id is not None:
+            parts = advance_balance_of(self.contracts, self.advance_paid, self.contractor_id, self.project_id,
+                                       self.catalog)
+            tip = (f"مخصوم من المستخلصات: {_money(parts['deducted'])}\n"
+                   f"دفعات مقدمة: {_money(parts['paid_out'])}")
+        self.tree_stats["previous"].setToolTip(tip)
         self.board_remaining.setText(_money(balance["remaining"]) if balance else "—")
         over = bool(balance) and balance["remaining"] < 0
         text = f"⚠ المبلغ أكبر من {captions['left']} بـ {_money(-balance['remaining'])}" if over else ""

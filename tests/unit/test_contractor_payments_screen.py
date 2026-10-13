@@ -923,7 +923,30 @@ def test_advance_balance_is_the_contracts_advance_less_what_was_paid():
     contracts = [_contract(*row) for row in CONTRACT_ROWS] + [_contract(604, 1, 11, "500000", "20")]
     balance = advance_balance_of(contracts, {(1, 11): Decimal("30000"), (2, 21): Decimal("1")}, 1, 11)
     # 1,000,000 × 10% + 500,000 × 20% = 200,000; 30,000 paid already.
-    assert balance == {"net": Decimal("200000"), "paid": Decimal("30000"), "remaining": Decimal("170000")}
+    assert balance == {"net": Decimal("200000"), "paid": Decimal("30000"), "remaining": Decimal("170000"),
+                       "deducted": Decimal("0"), "paid_out": Decimal("30000")}
+
+
+def test_the_advance_already_used_counts_the_extracts_deductions_too():
+    # The user's case (2026-10-13): an extract of 100,000 at 50% deducted 50,000, and 20,000 was
+    # paid as دفعة مقدمة → 70,000 already out of the contracts' advance.
+    contracts = [_contract(*row) for row in CONTRACT_ROWS] + [_contract(604, 1, 11, "500000", "20")]
+    catalog = [{"contractor_id": 1, "project_id": 11, "advance_deducted": Decimal("50000")},
+               {"contractor_id": 1, "project_id": 12, "advance_deducted": Decimal("999")},
+               {"contractor_id": 2, "project_id": 11, "advance_deducted": Decimal("999")}]
+    balance = advance_balance_of(contracts, {(1, 11): Decimal("20000")}, 1, 11, catalog)
+    assert balance["deducted"] == Decimal("50000") and balance["paid_out"] == Decimal("20000")
+    assert balance["paid"] == Decimal("70000")
+    assert balance["remaining"] == Decimal("130000")
+
+
+def test_with_net_holds_each_extracts_advance_deduction():
+    from app.services.contractor_payment_service import with_net
+
+    row = with_net([{"works_value": "100000", "vat_pct": "14", "advance_payment_pct": "50",
+                     "withholding_tax_pct": "0", "works_insurance_pct": "0", "social_insurance_pct": "0",
+                     "other_deductions": "0"}])[0]
+    assert row["advance_deducted"] == Decimal("50000.00")
 
 
 def test_an_advance_payment_comes_out_of_the_contracts_advance(screen):
