@@ -378,7 +378,9 @@ class ContractorsDashboardScreen(ContractingReportBase):
             "c_withholding": c["withholding_tax"], "c_social": c["social_insurance"],
             "c_works": c["works_insurance"], "c_other": c["other_deductions"],
             "k_advance": k["advance"], "k_works": k["works_insurance"], "k_tax": k["tax"], "k_social": k["social"],
-            "x_before_tax": x["before_tax"], "x_advance": x["advance_payment"], "x_withholding": x["withholding_tax"],
+            # The extracts' advance + the «دفعة مقدمة» payments (user, 2026-10-13).
+            "x_before_tax": x["before_tax"], "x_advance": self.dashboard["advance"]["total"],
+            "x_withholding": x["withholding_tax"],
             "x_works": x["works_insurance"], "x_social": x["social_insurance"], "x_other": x["other_deductions"],
         }
 
@@ -409,6 +411,11 @@ class ContractorsDashboardScreen(ContractingReportBase):
             self.dark["k_biggest"].set("—", "لا توجد عقود")
         self.dark["k_value"].set(_money(k["value"]), _count(k["count"], "عقود"))
         self.dark["x_total"].set(_money(x["works_value"]), "بعد الضريبة")
+        advance = d["advance"]
+        # The tile is narrow: name the payments' part only (the rest came off the extracts).
+        self.dark["x_advance"].set(_money(advance["total"]), f"منها دفعات مقدمة {_money(advance['paid_out'])}")
+        self.dark["x_advance"].setToolTip(f"مستخلصات {_money(advance['deducted'])} + "
+                                          f"دفعات مقدمة {_money(advance['paid_out'])}")
         self.dark["x_net"].set(_money(x["net"]), _count(x["count"], "مستخلصات"), x["net"] < 0)
         self.dark["p_total"].set(_money(p["total"]), _count(p["count"], "دفعة"))
         top = p["top"]

@@ -39,6 +39,7 @@ from app.ui.screens.contractor_contracts_report_screen import (
     P_STATUS,
     PROGRESS_HEADERS,
     RED,
+    BANDS,
     TAB_BANDS,
     TAB_PROGRESS,
     ContractorContractsReportScreen,
@@ -202,9 +203,9 @@ def test_progress_tab_has_the_users_columns_in_order(screen):
     headers = [screen.progress_table.horizontalHeaderItem(i).text().replace("\n", " ")
                for i in range(screen.progress_table.columnCount())]
     assert headers == [h.replace("\n", " ") for h in PROGRESS_HEADERS]
-    assert headers[:10] == ["تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
+    assert headers[:11] == ["تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
                             "نسبة الدفعة المقدمة", "إجمالي المستخلصات", "إجمالي المقدمة المستقطعة",
-                            "المتبقي من قيمة العقد", "المتبقي من الدفعة المقدمة"]
+                            "المصروف من الدفعات المقدمة", "المتبقي من قيمة العقد", "المتبقي من الدفعة المقدمة"]
 
 
 def test_progress_rows_and_totals(screen):
@@ -247,7 +248,7 @@ def _band_edges(screen):
     header = screen.band_table.horizontalHeader()
     viewport = header.viewport()
     titles, columns, start = [], [], 0
-    for label, count in zip(screen.band_header.labels, (4, 3, 4)):
+    for label, count in zip(screen.band_header.labels, [len(columns) for _t, _c, columns in BANDS]):
         left = label.mapToGlobal(QPoint(0, 0)).x()
         titles.append((left, left + label.width()))
         xs = [viewport.mapToGlobal(QPoint(header.sectionViewportPosition(i), 0)).x() for i in range(start, start + count)]
@@ -310,3 +311,54 @@ def test_rerun_with_fewer_rows_leaves_no_stale_widgets(screen):
     assert table.item(2, 5).text() == "" and table.item(2, P_STATUS).text() == ""
     bands = screen.band_table
     assert bands.item(2, BAND_KEYS.index("advance_payment_pct")).text() == ""
+
+
+# --- دفعات مقدمة from شاشة الدفعات (user, 2026-10-13) -----------------------------------------
+
+from app.services.contractor_contracts_report_service import allocate_advance_payments  # noqa: E402
+
+
+def _k(contract_id, contractor_id, project_id, value, pct):
+    return {"contract_id": contract_id, "contractor_id": contractor_id, "project_id": project_id,
+            "contract_value": Decimal(value), "advance_payment_pct": Decimal(pct)}
+
+
+def test_an_advance_payment_on_an_extract_goes_to_that_extracts_contract():
+    contracts = [_k(1, 7, 3, "100000", "10"), _k(2, 7, 3, "300000", "10")]
+    payment = {"payment_id": 9, "contractor_id": 7, "project_id": 3, "amount": Decimal("5000"), "contract_id": 2}
+    shares = allocate_advance_payments(contracts, [payment])
+    assert list(shares) == [2] and shares[2][0]["share"] == Decimal("5000.00")
+
+
+def test_a_general_advance_payment_is_split_by_each_contracts_advance():
+    # The user's choice: proportional. Advances 10,000 and 30,000 → a 20,000 payment splits 5,000 / 15,000.
+    contracts = [_k(1, 7, 3, "100000", "10"), _k(2, 7, 3, "300000", "10"), _k(3, 8, 3, "999999", "50")]
+    payment = {"payment_id": 9, "contractor_id": 7, "project_id": 3, "amount": Decimal("20000"), "contract_id": None}
+    shares = allocate_advance_payments(contracts, [payment])
+    assert shares[1][0]["share"] == Decimal("5000.00") and shares[2][0]["share"] == Decimal("15000.00")
+    assert 3 not in shares  # another contractor's contract on the same project
+
+
+def test_the_split_shares_always_add_up_to_the_payment():
+    contracts = [_k(i, 7, 3, "100000", "10") for i in (1, 2, 3)]
+    payment = {"payment_id": 9, "contractor_id": 7, "project_id": 3, "amount": Decimal("100"), "contract_id": None}
+    shares = allocate_advance_payments(contracts, [payment])
+    assert sum(lines[0]["share"] for lines in shares.values()) == Decimal("100.00")
+
+
+def test_a_payment_without_a_fitting_contract_is_left_out():
+    contracts = [_k(1, 7, 3, "100000", "10")]
+    payments = [{"payment_id": 1, "contractor_id": 7, "project_id": None, "amount": Decimal("1"), "contract_id": None},
+                {"payment_id": 2, "contractor_id": 7, "project_id": 4, "amount": Decimal("1"), "contract_id": None}]
+    assert allocate_advance_payments(contracts, payments) == {}
+
+
+def test_the_advance_left_takes_off_the_extracts_and_the_payments():
+    contract = {"contract_id": 1, "contract_value": Decimal("1000000"), "advance_payment_pct": Decimal("10")}
+    extract = {"works_value": "100000", "vat_pct": "14", "advance_payment_pct": "50", "withholding_tax_pct": "0",
+               "works_insurance_pct": "0", "social_insurance_pct": "0", "other_deductions": "0"}
+    row = report_row(contract, [extract], [{"share": Decimal("20000")}])
+    assert row["advance_agreed"] == Decimal("100000.00")
+    assert row["advance_deducted"] == Decimal("50000.00") and row["advance_paid_out"] == Decimal("20000")
+    assert row["remaining_advance"] == Decimal("30000.00")
+    assert row["recovered_pct"] == Decimal("70")

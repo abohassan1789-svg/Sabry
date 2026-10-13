@@ -7,7 +7,9 @@ One figure set per screen of «المقاولات», as the user listed them:
 * الشركات والمشاريع: the companies and how many projects each one has.
 * العقود: the count, أكبر عقد (its contractor and value), and value × each of the
   contract's four rates (``contract_amounts``).
-* المستخلصات: every amount of ``extract_amounts``, summed.
+* المستخلصات: every amount of ``extract_amounts``, summed. «إجمالي الدفعة المقدمة»
+  also adds the «دفعة مقدمة» payments of شاشة الدفعات (user, 2026-10-13): the
+  advance taken off the extracts + the advance paid out (``advance_figures``).
 * الدفعات: the total paid and the contractor paid the most.
 
 Added in the mockups and kept: «المتبقي للمقاولين» = صافي المستخلصات − الدفعات,
@@ -30,6 +32,7 @@ from typing import Any
 from app.services.contractor_contract_service import contract_amounts, to_decimal
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
 from app.services.contractor_extract_service import extract_amounts
+from app.services.contractor_payment_service import ADVANCE_PAYMENT
 
 CONTRACTOR_TYPES = ("مقاول", "مورد", "استشاري", "دعاية وإعلان", "سمسار")
 PAYMENT_METHODS = ("نقدي", "شيك", "تحويل")
@@ -130,6 +133,15 @@ def payments_figures(payments: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def advance_figures(extracts: dict[str, Any], payments: list[dict[str, Any]]) -> dict[str, Any]:
+    """«إجمالي الدفعة المقدمة» (user, 2026-10-13): what the extracts took off the advance
+    (``deducted``) + the «دفعة مقدمة» payments (``paid_out``)."""
+    deducted = extracts["advance_payment"]
+    paid_out = sum((_money(to_decimal(p.get("amount"))) for p in payments
+                    if p.get("account_type") == ADVANCE_PAYMENT), ZERO)
+    return {"deducted": deducted, "paid_out": paid_out, "total": deducted + paid_out}
+
+
 def build_dashboard(contractors: list[dict[str, Any]], companies: list[dict[str, Any]],
                     projects: list[dict[str, Any]], contracts: list[dict[str, Any]],
                     extracts: list[dict[str, Any]], payments: list[dict[str, Any]]) -> dict[str, Any]:
@@ -141,6 +153,7 @@ def build_dashboard(contractors: list[dict[str, Any]], companies: list[dict[str,
         "payments": payments_figures(payments),
     }
     dashboard["payments"]["remaining"] = dashboard["extracts"]["net"] - dashboard["payments"]["total"]
+    dashboard["advance"] = advance_figures(dashboard["extracts"], payments)
     return dashboard
 
 
@@ -221,7 +234,7 @@ class ContractorsDashboardService(ContractorContractsReportService):
         )
         sql, params = where("y.payment_date", "p.company_id", "y.project_id", "y.contractor_id", ("y",))
         payments = self._db.fetch_all(
-            "SELECT y.payment_id, y.amount, y.payment_method, d.contractor_name "
+            "SELECT y.payment_id, y.amount, y.payment_method, y.account_type, d.contractor_name "
             "FROM contractor_payments y "
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
             "LEFT JOIN company_projects p ON p.project_id = y.project_id " + sql,  # a payment may have no project

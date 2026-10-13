@@ -8,8 +8,13 @@ One row per contract, with the user's columns: تاريخ العقد، اسم ا
 * المقدمة المستقطعة = sum of each extract's «الدفعة المقدمة» line, computed by
   ``extract_amounts`` exactly as the extracts screen shows it.
 * المتبقي من قيمة العقد = قيمة العقد − إجمالي المستخلصات.
-* المتبقي من الدفعة المقدمة = قيمة العقد × نسبة المقدمة − المستقطعة (the same
-  ``agreed`` as the extracts screen's «رصيد الدفعة المقدمة» strip).
+* المصروف من الدفعات المقدمة = the approved «دفعة مقدمة» payments (شاشة الدفعات) that
+  fall to the contract (user, 2026-10-13): one made on an extract goes to that
+  extract's contract; a general one is split over the contractor's approved
+  contracts on its project in proportion to each contract's advance
+  (``allocate_advance_payments``).
+* المتبقي من الدفعة المقدمة = قيمة العقد × نسبة المقدمة − المستقطعة − المصروف
+  من الدفعات (the same rule as كشف حساب مقاول and شاشة الدفعات).
 
 Both remainders go negative, never clamped, when the extracts passed the contract
 (user confirmed 2026-09-26). The period filters on تاريخ العقد; a contract's
@@ -29,6 +34,7 @@ from typing import Any
 from app.database.db import Database
 from app.services.contractor_contract_service import to_decimal
 from app.services.contractor_extract_service import extract_amounts
+from app.services.contractor_payment_service import ADVANCE_PAYMENT
 
 _CENT = Decimal("0.01")
 ZERO = Decimal("0")
@@ -41,7 +47,7 @@ STATUS_OVER = "تجاوز العقد"
 
 # Keys summed by ``report_totals``.
 TOTAL_KEYS = ("contract_value", "extracts_total", "advance_agreed", "advance_deducted",
-              "remaining_value", "remaining_advance")
+              "advance_paid_out", "remaining_value", "remaining_advance")
 
 
 def _money(value: Decimal) -> Decimal:
@@ -62,12 +68,58 @@ def contract_status(contract_value: Decimal, extracts_total: Decimal, extracts_c
     return STATUS_RUNNING
 
 
-def report_row(contract: dict[str, Any], extracts: list[dict[str, Any]]) -> dict[str, Any]:
-    """One report line: *contract* plus the figures of its *extracts*."""
+def contract_agreed(contract: dict[str, Any]) -> Decimal:
+    """قيمة العقد × نسبة الدفعة المقدمة, to the piaster."""
+    value = _money(to_decimal(contract.get("contract_value")))
+    return _money(value * to_decimal(contract.get("advance_payment_pct")) / 100)
+
+
+def allocate_advance_payments(contracts: list[dict[str, Any]],
+                              payments: list[dict[str, Any]]) -> dict[Any, list[dict[str, Any]]]:
+    """``contract_id -> [payment + its «share»]``: which part of each دفعة مقدمة falls to which contract.
+
+    *contracts* are every approved contract of the payments' contractors and projects.
+    A payment on an extract (``contract_id`` set) goes whole to that extract's contract.
+    A general one (user, 2026-10-13) is split over the contractor's contracts on its
+    project in proportion to their advance (equally when none has one); the last
+    contract takes the rounding rest, so the shares always add up to the payment.
+    A payment that fits no contract (no project, or none there) is left out.
+    """
+    by_place: dict[tuple, list[dict[str, Any]]] = defaultdict(list)
+    for contract in contracts:
+        by_place[(str(contract.get("contractor_id")), str(contract.get("project_id")))].append(contract)
+    known = {str(contract.get("contract_id")) for contract in contracts}
+    out: dict[Any, list[dict[str, Any]]] = defaultdict(list)
+    for payment in payments:
+        amount = _money(to_decimal(payment.get("amount")))
+        if payment.get("contract_id") is not None and str(payment["contract_id"]) in known:
+            out[payment["contract_id"]].append({**payment, "share": amount})
+            continue
+        targets = by_place.get((str(payment.get("contractor_id")), str(payment.get("project_id"))), [])
+        if not targets:
+            continue
+        weights = [contract_agreed(contract) for contract in targets]
+        whole = sum(weights, ZERO)
+        if whole <= 0:
+            weights, whole = [Decimal(1)] * len(targets), Decimal(len(targets))
+        left = amount
+        for index, (contract, weight) in enumerate(zip(targets, weights)):
+            share = left if index == len(targets) - 1 else _money(amount * weight / whole)
+            left -= share
+            if share:
+                out[contract["contract_id"]].append({**payment, "share": share})
+    return out
+
+
+def report_row(contract: dict[str, Any], extracts: list[dict[str, Any]],
+               advance_payments: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """One report line: *contract* plus the figures of its *extracts* and its share of the
+    دفعات مقدمة (*advance_payments*, from ``allocate_advance_payments``)."""
     value = _money(to_decimal(contract.get("contract_value")))
     pct = to_decimal(contract.get("advance_payment_pct"))
     works = _money(sum((to_decimal(x.get("works_value")) for x in extracts), ZERO))
     deducted = sum((extract_amounts(x)["advance_payment"] for x in extracts), ZERO)
+    paid_out = sum((to_decimal(p.get("share")) for p in advance_payments or ()), ZERO)
     agreed = _money(value * pct / 100)
     return {
         **contract,
@@ -77,27 +129,35 @@ def report_row(contract: dict[str, Any], extracts: list[dict[str, Any]]) -> dict
         "extracts_total": works,
         "advance_agreed": agreed,
         "advance_deducted": deducted,
+        "advance_paid_out": paid_out,
         "remaining_value": value - works,
-        "remaining_advance": agreed - deducted,
+        "remaining_advance": agreed - deducted - paid_out,
         "executed_pct": _percent(works, value),
-        "recovered_pct": _percent(deducted, agreed),
+        # How much of the advance is used up: deducted by the extracts and paid out.
+        "recovered_pct": _percent(deducted + paid_out, agreed),
         "status": contract_status(value, works, len(extracts)),
     }
 
 
-def build_report(contracts: list[dict[str, Any]], extracts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Every contract's line; *extracts* are matched on ``contract_id``."""
+def build_report(contracts: list[dict[str, Any]], extracts: list[dict[str, Any]],
+                 advance: dict[Any, list[dict[str, Any]]] | None = None) -> list[dict[str, Any]]:
+    """Every contract's line; *extracts* are matched on ``contract_id``, *advance* is
+    ``allocate_advance_payments``'s result."""
     by_contract: dict[Any, list[dict[str, Any]]] = defaultdict(list)
     for extract in extracts:
         by_contract[extract.get("contract_id")].append(extract)
-    return [report_row(contract, by_contract.get(contract.get("contract_id"), [])) for contract in contracts]
+    advance = advance or {}
+    return [report_row(contract, by_contract.get(contract.get("contract_id"), []),
+                       advance.get(contract.get("contract_id"), []))
+            for contract in contracts]
 
 
 def report_totals(rows: list[dict[str, Any]]) -> dict[str, Any]:
     totals: dict[str, Any] = {key: sum((row[key] for row in rows), ZERO) for key in TOTAL_KEYS}
     totals["count"] = len(rows)
     totals["executed_pct"] = _percent(totals["extracts_total"], totals["contract_value"])
-    totals["recovered_pct"] = _percent(totals["advance_deducted"], totals["advance_agreed"])
+    totals["recovered_pct"] = _percent(totals["advance_deducted"] + totals["advance_paid_out"],
+                                       totals["advance_agreed"])
     return totals
 
 
@@ -157,4 +217,28 @@ class ContractorContractsReportService:
             "FROM contractor_extracts WHERE contract_id = ANY(%s) AND status = 'approved'",
             [[row["contract_id"] for row in contracts]],
         )
-        return build_report(contracts, extracts)
+        return build_report(contracts, extracts, self.advance_allocation(contracts))
+
+    def advance_allocation(self, contracts: list[dict[str, Any]]) -> dict[Any, list[dict[str, Any]]]:
+        """The approved دفعات مقدمة of *contracts*' contractors and projects, split per contract.
+
+        The split needs every approved contract of those contractors on those projects,
+        not just the ones the filters kept (a period may hide a sibling contract)."""
+        contractors = sorted({row["contractor_id"] for row in contracts})
+        projects = sorted({row["project_id"] for row in contracts})
+        siblings = self._db.fetch_all(
+            "SELECT contract_id, contractor_id, project_id, contract_value, advance_payment_pct "
+            "FROM contractor_contracts WHERE status = 'approved' "
+            "AND contractor_id = ANY(%s) AND project_id = ANY(%s) ORDER BY contract_date, contract_no",
+            [contractors, projects],
+        )
+        payments = self._db.fetch_all(
+            "SELECT y.payment_id, y.payment_date, y.contractor_id, y.project_id, y.extract_id, y.amount, "
+            "y.payment_method, y.reference_no, x.contract_id, x.extract_no "
+            "FROM contractor_payments y LEFT JOIN contractor_extracts x ON x.extract_id = y.extract_id "
+            "WHERE y.account_type = %s AND y.status = 'approved' "
+            "AND y.contractor_id = ANY(%s) AND y.project_id = ANY(%s) "
+            "ORDER BY y.payment_date, y.payment_id",
+            [ADVANCE_PAYMENT, contractors, projects],
+        )
+        return allocate_advance_payments(siblings, payments)

@@ -34,7 +34,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.services.contractor_advance_report_service import ContractorAdvanceReportService, lines_totals
+from app.services.contractor_advance_report_service import (
+    PAYMENT_LABEL,
+    PAYMENT_LINE,
+    ContractorAdvanceReportService,
+    lines_totals,
+)
 from app.services.contractor_contracts_report_service import report_totals
 from app.ui.common.theme import GREEN, TEXT, _button_style
 from app.ui.screens.contracting_report_base import (
@@ -69,6 +74,7 @@ COLUMNS: tuple[tuple[str, str, str], ...] = (
     ("advance_payment_pct", "نسبة الدفعة\nالمقدمة", RATE_COL),
     ("advance_agreed", "قيمة الدفعة المقدمة\nمن العقد", AMOUNT_COL),
     ("advance_deducted", "إجمالي المسدد من\nالدفعة المقدمة", AMOUNT_COL),
+    ("advance_paid_out", "المصروف من\nالدفعات المقدمة", AMOUNT_COL),  # شاشة الدفعات (2026-10-13)
     ("remaining_advance", "المتبقي", AMOUNT_COL),
 )
 COLUMN_KEYS = tuple(key for key, _header, _kind in COLUMNS)
@@ -81,6 +87,7 @@ CARDS = (
     ("contract_value", "إجمالي قيمة العقد"),
     ("advance_agreed", "إجمالي الدفعة المقدمة من العقد"),
     ("advance_deducted", "إجمالي المسدد من العقد"),
+    ("advance_paid_out", "إجمالي المصروف من الدفعات"),
     ("remaining_advance", "إجمالي المتبقي"),
 )
 COLUMN_GROUPS = (("بيانات العقد", COLUMN_KEYS[:4]), ("الدفعة المقدمة", COLUMN_KEYS[4:]))
@@ -99,8 +106,9 @@ LINE_COLUMNS: tuple[tuple[str, str, str], ...] = (
 LINE_KEYS = tuple(key for key, _header, _kind in LINE_COLUMNS)
 LINE_KIND = {key: kind for key, _header, kind in LINE_COLUMNS}
 
-# One colour per extract on the bar (cycled), and the unpaid rest.
+# One colour per extract on the bar (cycled), blues for the دفعات مقدمة, and the unpaid rest.
 SEGMENT_COLORS = ("#137A38", "#2F9D5A", "#6FC08D", "#A9DCBA")
+PAYMENT_COLORS = ("#1D4ED8", "#3B82F6", "#93C5FD")
 REST_COLOR = "#E5E7EB"
 SELECTED_BG = "#FEF3C7"
 
@@ -113,6 +121,8 @@ def cell_text(row: dict[str, Any], key: str, kinds: dict[str, str]) -> str:
     if key in ("contract_date", "extract_date"):
         return date_text(value)
     kind = kinds[key]
+    if value is None and kind != TEXT_COL:  # a دفعة مقدمة line has no extract total nor rate
+        return ""
     if kind == RATE_COL:
         return f"{_rate_text(value)}%"
     if kind == AMOUNT_COL:
@@ -120,13 +130,26 @@ def cell_text(row: dict[str, Any], key: str, kinds: dict[str, str]) -> str:
     return str(value or "")
 
 
-def _count_text(count: int) -> str:
-    return f"{count} مستخلص" if count == 1 else f"{count} مستخلصات"
+def _count_text(count: int, payments: int = 0) -> str:
+    text = f"{count} مستخلص" if count == 1 else f"{count} مستخلصات"
+    if payments:
+        text += f" + {payments} دفعة مقدمة" if payments == 1 else f" + {payments} دفعات مقدمة"
+    return text
+
+
+def _line_color(lines: list[dict[str, Any]], index: int) -> str:
+    """The bar / legend colour of line *index*: greens for extracts, blues for payments."""
+    payment = lines[index].get("kind") == PAYMENT_LINE
+    rank = sum(1 for line in lines[:index] if (line.get("kind") == PAYMENT_LINE) == payment)
+    palette = PAYMENT_COLORS if payment else SEGMENT_COLORS
+    return palette[rank % len(palette)]
 
 
 def _paid_pct(contract: dict[str, Any]) -> Decimal:
+    """How much of the advance is used: deducted by the extracts and paid out (2026-10-13)."""
     agreed = contract.get("advance_agreed") or Decimal(0)
-    return contract["advance_deducted"] / agreed * 100 if agreed > 0 else Decimal(0)
+    used = Decimal(contract.get("advance_deducted") or 0) + Decimal(contract.get("advance_paid_out") or 0)
+    return used / agreed * 100 if agreed > 0 else Decimal(0)
 
 
 def _new_table(columns: int, headers: list[str]) -> QTableWidget:
@@ -160,7 +183,7 @@ def fill_lines_table(table: QTableWidget, lines: list[dict[str, Any]]) -> None:
         item.setBackground(QBrush(QColor(TOTAL_BG)))
         table.setItem(last, column, item)
     table.setSpan(last, 0, 1, 5)
-    table.item(last, 0).setText(f"إجمالي المسدد — {_count_text(totals['count'])}")
+    table.item(last, 0).setText(f"إجمالي المسدد — {_count_text(totals['count'], totals['payments'])}")
     table.setRowHeight(last, 34)
 
 
@@ -195,6 +218,7 @@ class AdvanceBar(QWidget):
         super().__init__()
         self.agreed = Decimal(agreed or 0)
         self.parts = [Decimal(line["advance_payment"] or 0) for line in lines]
+        self.colors = [_line_color(lines, index) for index in range(len(lines))]
         self.setFixedHeight(26)
 
     def segments(self) -> list[tuple[float, float, str]]:
@@ -206,7 +230,7 @@ class AdvanceBar(QWidget):
         pieces, start = [], 0.0
         for index, part in enumerate(self.parts):
             width = float(part / whole)
-            pieces.append((start, width, SEGMENT_COLORS[index % len(SEGMENT_COLORS)]))
+            pieces.append((start, width, self.colors[index]))
             start += width
         if self.agreed > paid:
             pieces.append((start, float((self.agreed - paid) / whole), REST_COLOR))
@@ -262,7 +286,8 @@ class AdvanceStatementDialog(QDialog):
         for key, caption, background, color in (
             ("contract_value", "قيمة العقد", "#F8FAFC", TEXT),
             ("advance_agreed", f"قيمة الدفعة المقدمة من العقد ({rate}%)", "#F8FAFC", TEXT),
-            ("advance_deducted", f"إجمالي المسدد ({_paid_pct(contract):.0f}%)", "#FEF3C7", "#92400E"),
+            ("advance_deducted", "المسدد من المستخلصات", "#FEF3C7", "#92400E"),
+            ("advance_paid_out", "المصروف من الدفعات المقدمة", "#DBEAFE", "#1E40AF"),
             ("remaining_advance", "المتبقي", GREEN, "#FFFFFF"),
         ):
             box = QFrame()
@@ -316,7 +341,7 @@ class AdvanceStatementDialog(QDialog):
             layout.addWidget(self.table, 1 if len(lines) > 12 else 0)
         else:
             self.table = None
-            empty = QLabel("لا توجد مستخلصات على هذا العقد حتى الآن.")
+            empty = QLabel("لا توجد مستخلصات ولا دفعات مقدمة على هذا العقد حتى الآن.")
             empty.setAlignment(Qt.AlignCenter)
             empty.setStyleSheet(f"font-size:15px; font-weight:800; color:{MUTED}; padding:30px;")
             layout.addWidget(empty, 1)
@@ -335,8 +360,9 @@ class AdvanceStatementDialog(QDialog):
     def _legend_html(self) -> str:
         parts = []
         for index, line in enumerate(self.lines):
-            color = SEGMENT_COLORS[index % len(SEGMENT_COLORS)]
-            number = str(line.get("extract_no") or "").rsplit("/", 1)[-1]
+            color = _line_color(self.lines, index)
+            number = (PAYMENT_LABEL if line.get("kind") == PAYMENT_LINE
+                      else str(line.get("extract_no") or "").rsplit("/", 1)[-1])
             parts.append(f"<span style='color:{color}'>■</span> {number} · {date_text(line.get('extract_date'))} · "
                          f"{_money(line.get('advance_payment'))}")
         remaining = Decimal(self.contract.get("remaining_advance") or 0)
@@ -358,7 +384,8 @@ class InlineDetail(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(6)
-        title = QLabel(f"الدفعات المقدمة المسددة من مستخلصات العقد {contract.get('contract_no') or ''}")
+        title = QLabel(f"الدفعة المقدمة المسددة من مستخلصات العقد {contract.get('contract_no') or ''} "
+                       "والمصروف منها في الدفعات")
         title.setStyleSheet(f"font-size:13px; font-weight:900; color:{TEXT};")
         layout.addWidget(title)
         if lines:
@@ -366,7 +393,7 @@ class InlineDetail(QFrame):
             layout.addWidget(self.table)
         else:
             self.table = None
-            empty = QLabel("لا توجد مستخلصات على هذا العقد حتى الآن.")
+            empty = QLabel("لا توجد مستخلصات ولا دفعات مقدمة على هذا العقد حتى الآن.")
             empty.setStyleSheet(f"font-size:13px; font-weight:800; color:{MUTED};")
             layout.addWidget(empty)
 
@@ -385,7 +412,8 @@ class ContractorAdvanceReportScreen(ContractingReportBase):
         self.settings = settings or report_settings()
         self.rows: list[dict[str, Any]] = []
         self.totals: dict[str, Any] = report_totals([])
-        self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS)
+        self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS,
+                                            added=("advance_paid_out",))
         self.expanded: set[Any] = set()
         self.inline_kinds: list[tuple[str, Any]] = []
         self.dialog: AdvanceStatementDialog | None = None

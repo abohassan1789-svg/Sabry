@@ -99,12 +99,17 @@ def test_the_popup_total_equals_the_reports_paid_column():
 
 def test_contract_extracts_query():
     class Db:
+        queries = []
+
         def fetch_all(self, query, params=None):
-            self.query, self.params = query, params
-            return [x for x in EXTRACTS if x["contract_id"] == 3]
+            self.queries.append((query, params))
+            if "FROM contractor_extracts WHERE contract_id" in query:
+                return [x for x in EXTRACTS if x["contract_id"] == 3]
+            return []
     db = Db()
     lines = ContractorAdvanceReportService(db).contract_extracts(CONTRACTS[2])
-    assert "WHERE contract_id = %s" in db.query and db.params == [3]
+    query, params = db.queries[0]
+    assert "WHERE contract_id = %s" in query and params == [3]
     assert len(lines) == 2 and lines[0]["project_name"] == "مشروع 3"
 
 
@@ -179,7 +184,7 @@ def test_columns_are_the_users_in_order(screen):
     headers = [table.horizontalHeaderItem(i).text().replace("\n", " ") for i in range(table.columnCount())]
     assert headers == ["تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
                        "نسبة الدفعة المقدمة", "قيمة الدفعة المقدمة من العقد",
-                       "إجمالي المسدد من الدفعة المقدمة", "المتبقي"]
+                       "إجمالي المسدد من الدفعة المقدمة", "المصروف من الدفعات المقدمة", "المتبقي"]
 
 
 def test_rows_and_totals(screen):
@@ -200,7 +205,7 @@ def test_the_four_total_cards(screen):
     titles = [screen.card_values[key].parent().findChildren(type(screen.count_label))[0].text()
               for key in screen.card_values]
     assert titles == ["إجمالي قيمة العقد", "إجمالي الدفعة المقدمة من العقد", "إجمالي المسدد من العقد",
-                      "إجمالي المتبقي"]
+                      "إجمالي المصروف من الدفعات", "إجمالي المتبقي"]
     assert screen.card_values["contract_value"].text() == "5,350,000.00"
     assert screen.card_values["advance_agreed"].text() == "535,000.00"
     assert screen.card_values["advance_deducted"].text() == "247,000.00"
@@ -265,13 +270,13 @@ def test_lines_are_fetched_once_per_run(screen):
 def test_column_chooser_covers_both_tabs_and_is_saved(qt_app, settings):
     first = ContractorAdvanceReportScreen(FakeService(), settings=settings)
     assert list(first.chooser.boxes) == list(COLUMN_KEYS)
-    assert first.columns_count.text() == "ظاهر 9 من 9 أعمدة"
+    assert first.columns_count.text() == "ظاهر 10 من 10 أعمدة"
     first.chooser.boxes["company_name"].setChecked(False)
     first.chooser.boxes["contract_value"].setChecked(False)
     assert _visible(first.popup_table) == _visible(first.inline_table, 1)
     assert "company_name" not in _visible(first.popup_table)
     assert not first.inline_table.isColumnHidden(0)  # the ＋/－ column always shows
-    assert first.columns_count.text() == "ظاهر 7 من 9 أعمدة"
+    assert first.columns_count.text() == "ظاهر 8 من 10 أعمدة"
     # the totals label moves to the first visible text column
     assert first.popup_table.item(3, 0).text() == "الإجمالي — 3 عقود"
     first.set_visible_columns([k for k in COLUMN_KEYS if k != "contract_date"])
@@ -292,3 +297,66 @@ def test_filters_run_on_the_contract_date(screen):
     assert isinstance(screen.service.last_filters["date_from"], datetime.date)
     assert screen.popup_table.rowCount() == 2
     assert screen.inline_table.rowCount() == 2
+
+
+# --- دفعات مقدمة from شاشة الدفعات (user, 2026-10-13) -----------------------------------------
+
+from app.services.contractor_advance_report_service import PAYMENT_LINE, by_date, payment_lines  # noqa: E402
+from app.ui.screens import contractor_advance_report_screen as adv_screen  # noqa: E402
+from app.ui.screens.contracting_report_base import load_columns, save_columns  # noqa: E402
+
+
+def _payment_lines():
+    payments = [
+        {"payment_id": 1, "payment_date": datetime.date(2026, 2, 1), "amount": Decimal("20000"),
+         "share": Decimal("20000"), "extract_no": None},
+        {"payment_id": 2, "payment_date": datetime.date(2026, 4, 1), "amount": Decimal("9000"),
+         "share": Decimal("3000"), "extract_no": "A-H/CT-1001/EX-02"},
+    ]
+    return payment_lines(CONTRACTS[0], payments)
+
+
+def test_payment_lines_sit_in_the_extract_columns():
+    lines = _payment_lines()
+    assert [line["kind"] for line in lines] == [PAYMENT_LINE, PAYMENT_LINE]
+    assert lines[0]["extract_no"] == "دفعة مقدمة" and lines[0]["advance_payment"] == Decimal("20000")
+    assert lines[1]["extract_no"] == "دفعة مقدمة — EX-02 (جزء من 9,000.00)"
+    assert lines[0]["works_value"] is None and lines[0]["advance_payment_pct"] is None
+
+
+def test_the_popup_mixes_extracts_and_payments_by_date_and_totals_both():
+    lines = by_date(_lines(CONTRACTS[0]) + _payment_lines())
+    dates = [line["extract_date"] for line in lines]
+    assert dates == sorted(dates)
+    totals = lines_totals(lines)
+    assert totals["count"] == 3 and totals["payments"] == 2
+    assert totals["works_value"] == Decimal("1450000.00")  # payments add no extract total
+    assert totals["advance_payment"] == Decimal("145000.00") + Decimal("23000")
+
+
+def test_a_payment_line_shows_blank_extract_cells(qt_app):
+    line = _payment_lines()[0]
+    assert adv_screen.cell_text(line, "works_value", adv_screen.LINE_KIND) == ""
+    assert adv_screen.cell_text(line, "advance_payment_pct", adv_screen.LINE_KIND) == ""
+    assert adv_screen.cell_text(line, "advance_payment", adv_screen.LINE_KIND) == "20,000.00"
+
+
+def test_the_bar_paints_payments_in_blue(qt_app):
+    lines = by_date(_lines(CONTRACTS[0]) + _payment_lines())
+    bar = adv_screen.AdvanceBar(Decimal("250000"), lines)
+    for line, color in zip(lines, bar.colors):
+        assert (color in adv_screen.PAYMENT_COLORS) == (line.get("kind") == PAYMENT_LINE)
+
+
+def test_the_paid_share_counts_the_payments_too():
+    contract = {"advance_agreed": Decimal("100000"), "advance_deducted": Decimal("50000"),
+                "advance_paid_out": Decimal("20000")}
+    assert adv_screen._paid_pct(contract) == Decimal("70")
+
+
+def test_a_new_column_shows_once_for_a_user_who_saved_a_choice(settings):
+    keys = ("a", "b", "new")
+    save_columns(settings, "rep", ("a",))
+    assert load_columns(settings, "rep", keys, keys, added=("new",)) == ("a", "new")
+    save_columns(settings, "rep", ("a",))  # the user hides it again
+    assert load_columns(settings, "rep", keys, keys, added=("new",)) == ("a",)

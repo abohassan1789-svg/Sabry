@@ -61,10 +61,13 @@ TAB_PROGRESS, TAB_BANDS = 0, 1
 # نموذج 7: the user's columns in their order, then «الحالة».
 PROGRESS_HEADERS = (
     "تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد", "نسبة الدفعة\nالمقدمة",
-    "إجمالي\nالمستخلصات", "إجمالي المقدمة\nالمستقطعة", "المتبقي من\nقيمة العقد", "المتبقي من\nالدفعة المقدمة",
-    "الحالة",
+    "إجمالي\nالمستخلصات", "إجمالي المقدمة\nالمستقطعة", "المصروف من\nالدفعات المقدمة", "المتبقي من\nقيمة العقد",
+    "المتبقي من\nالدفعة المقدمة", "الحالة",
 )
-P_REMAINING_VALUE, P_REMAINING_ADVANCE, P_STATUS = 8, 9, 10
+# The plain cells of نموذج 7, in column order (the two remainders and «الحالة» follow them).
+PROGRESS_KEYS = ("contract_date", "company_name", "project_name", "contractor_name", "contract_value",
+                 "advance_payment_pct", "extracts_total", "advance_deducted", "advance_paid_out")
+P_REMAINING_VALUE, P_REMAINING_ADVANCE, P_STATUS = 9, 10, 11
 
 # نموذج 5: (band title, band colours, its columns as (header, row key)).
 BANDS: tuple[tuple[str, tuple[str, str, str], tuple[tuple[str, str], ...]], ...] = (
@@ -76,7 +79,8 @@ BANDS: tuple[tuple[str, tuple[str, str, str], tuple[tuple[str, str], ...]], ...]
         ("المتبقي من\nقيمة العقد", "remaining_value"))),
     ("الدفعة المقدمة", ("#FEF3C7", "#92400E", "#FFFBF0"), (
         ("نسبة الدفعة\nالمقدمة", "advance_payment_pct"), ("قيمة الدفعة\nالمقدمة", "advance_agreed"),
-        ("المقدمة\nالمستقطعة", "advance_deducted"), ("المتبقي من\nالدفعة المقدمة", "remaining_advance"))),
+        ("المقدمة\nالمستقطعة", "advance_deducted"), ("المصروف من\nالدفعات", "advance_paid_out"),
+        ("المتبقي من\nالدفعة المقدمة", "remaining_advance"))),
 )
 BAND_KEYS = tuple(key for _title, _colors, columns in BANDS for _header, key in columns)
 NAME_KEYS = ("company_name", "project_name", "contractor_name")
@@ -301,9 +305,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
         table.setRowCount(0)  # drops the last run's items and bars, so no stale cell survives
         table.setRowCount(len(self.rows) + 1)
         for index, row in enumerate(self.rows):
-            for column, key in enumerate(("contract_date", "company_name", "project_name", "contractor_name",
-                                          "contract_value", "advance_payment_pct", "extracts_total",
-                                          "advance_deducted")):
+            for column, key in enumerate(PROGRESS_KEYS):
                 table.setItem(index, column, self._item(cell_text(row, key), bold=key == "contractor_name"))
             self._progress_cells(index, row, bold=False)
             text_color, background = STATUS_COLORS[row["status"]]
@@ -313,7 +315,8 @@ class ContractorContractsReportScreen(ContractingReportBase):
             table.setItem(index, P_STATUS, status)
             table.setRowHeight(index, 46)
         last = len(self.rows)
-        for column, key in ((4, "contract_value"), (6, "extracts_total"), (7, "advance_deducted")):
+        for column, key in ((4, "contract_value"), (6, "extracts_total"), (7, "advance_deducted"),
+                            (8, "advance_paid_out")):
             table.setItem(last, column, self._item(_money(self.totals[key]), bold=True,
                                                    negative=self.totals[key] < 0))
         self._progress_cells(last, self.totals, bold=True)
@@ -323,7 +326,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
     def _progress_cells(self, index: int, row: dict[str, Any], bold: bool) -> None:
         for column, key, caption, percent_key, color in (
             (P_REMAINING_VALUE, "remaining_value", "نُفّذ", "executed_pct", GREEN),
-            (P_REMAINING_ADVANCE, "remaining_advance", "استُرد", "recovered_pct", AMBER),
+            (P_REMAINING_ADVANCE, "remaining_advance", "اتصرف", "recovered_pct", AMBER),
         ):
             percent = row[percent_key]
             self.progress_table.setItem(index, column, self._item(""))

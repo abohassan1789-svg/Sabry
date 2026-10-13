@@ -148,13 +148,28 @@ def _columns_key(prefix: str) -> str:
 
 
 def load_columns(settings: QSettings, prefix: str, all_keys: Iterable[str],
-                 defaults: tuple[str, ...]) -> tuple[str, ...]:
-    """The current user's saved column choice, in table order; *defaults* if never saved."""
+                 defaults: tuple[str, ...], added: Iterable[str] = ()) -> tuple[str, ...]:
+    """The current user's saved column choice, in table order; *defaults* if never saved.
+
+    *added* are columns that came after the user may have saved a choice: each one is
+    switched on once (and the choice saved), so it shows; hiding it later sticks."""
+    all_keys = tuple(all_keys)
     saved = settings.value(_columns_key(prefix))
     if saved is None:
         return defaults
     chosen = set(str(saved).split(","))
-    return tuple(key for key in all_keys if key in chosen)
+    changed = False
+    for key in added:
+        marker = f"{prefix}_added/{key}/{_columns_key(prefix).rsplit('/', 1)[-1]}"
+        if settings.value(marker) is None:
+            settings.setValue(marker, "1")
+            if key not in chosen:
+                chosen.add(key)
+                changed = True
+    result = tuple(key for key in all_keys if key in chosen)
+    if changed:
+        save_columns(settings, prefix, result)
+    return result
 
 
 def save_columns(settings: QSettings, prefix: str, keys: Iterable[str]) -> None:

@@ -56,9 +56,9 @@ def _extract(name, works, other="0"):
 
 EXTRACTS = [_extract(AHMED, "456000"), _extract(SAFA, "228000", other="1000")]
 PAYMENTS = [
-    {"contractor_name": AHMED, "amount": Decimal("100000"), "payment_method": "تحويل"},
-    {"contractor_name": SAFA, "amount": Decimal("150000"), "payment_method": "شيك"},
-    {"contractor_name": AHMED, "amount": Decimal("80000"), "payment_method": "نقدي"},
+    {"contractor_name": AHMED, "amount": Decimal("100000"), "payment_method": "تحويل", "account_type": "دفعة مقدمة"},
+    {"contractor_name": SAFA, "amount": Decimal("150000"), "payment_method": "شيك", "account_type": "رصيد جاري"},
+    {"contractor_name": AHMED, "amount": Decimal("80000"), "payment_method": "نقدي", "account_type": "رصيد جاري"},
 ]
 
 
@@ -119,6 +119,13 @@ def test_payments_top_payee_and_remaining():
     assert p["top"] == (AHMED, Decimal("180000.00"), 2)
     assert p["methods"]["شيك"] == (Decimal("150000.00"), 1)
     assert p["remaining"] == d["extracts"]["net"] - Decimal("330000.00")
+
+
+def test_the_advance_total_adds_the_advance_payments():
+    # The user (2026-10-13): the dashboard's advance also sums the «دفعة مقدمة» payments.
+    a = _dashboard()["advance"]
+    assert a["deducted"] == Decimal("68400.00") and a["paid_out"] == Decimal("100000.00")
+    assert a["total"] == Decimal("168400.00")
 
 
 def test_empty_dashboard():
@@ -184,6 +191,9 @@ def test_dark_tab(screen):
     assert screen.dark["k_biggest"].value.text() == "6,200,000.00"
     assert screen.dark["k_biggest"].hint.text() == BENAA
     assert screen.dark["x_before_tax"].value.text() == "600,000.00"
+    assert screen.dark["x_advance"].value.text() == "168,400.00"
+    assert screen.dark["x_advance"].hint.text() == "منها دفعات مقدمة 100,000.00"
+    assert screen.dark["x_advance"].toolTip() == "مستخلصات 68,400.00 + دفعات مقدمة 100,000.00"
     assert screen.dark["p_top"].value.text() == "180,000.00"
     assert AHMED in screen.dark["p_top"].hint.text()
 
@@ -195,6 +205,7 @@ def test_leaders_tab(screen):
     assert screen.board_payments.rows[0].name.text() == SAFA
     assert not screen.board_payments.rows[1].isVisibleTo(screen)
     assert screen.minis["k_tax"].text() == "86,000.00"
+    assert screen.minis["x_advance"].text() == "168,400.00"
 
 
 def test_no_data(screen):
