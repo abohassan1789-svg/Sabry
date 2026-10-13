@@ -3,7 +3,8 @@
 The columns are the ones the user listed, in their order (2026-10-13): رقم
 العقد، تاريخ العقد، اسم المقاول، اسم الشركة، اسم المشروع، اسم العقد.
 
-Above the table each column has its own drop list: «الكل» plus every value in
+Above the table each column has its own drop list (two rows of three, so
+each list is wide enough to show whole names — user, 2026-10-13): «الكل» plus every value in
 that column, searchable by any part like the program's other drop lists. The
 lists narrow the table together (AND). The caller passes the contracts
 (``ContractorContractService.contracts()``) and reads :attr:`selected` back.
@@ -21,7 +22,6 @@ from PySide6.QtWidgets import (
     QDialog,
     QGridLayout,
     QHBoxLayout,
-    QHeaderView,
     QLabel,
     QPushButton,
     QTableWidget,
@@ -43,6 +43,7 @@ COLUMNS = (
     ("contract_name", "اسم العقد"),
 )
 ALL = "الكل"
+FILTERS_PER_ROW = 3
 
 
 def cell_text(row: dict[str, Any], key: str) -> str:
@@ -63,7 +64,7 @@ class ContractorContractPickerDialog(QDialog):
         self.filters: dict[str, QComboBox] = {}
 
         self.setWindowTitle("بحث عن عقد")
-        self.resize(1150, 600)
+        self.resize(1450, 760)
         self.setLayoutDirection(Qt.RightToLeft)
         self._build_ui()
         enable_combo_search(self)
@@ -75,15 +76,15 @@ class ContractorContractPickerDialog(QDialog):
         root.setSpacing(10)
 
         grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
+        grid.setHorizontalSpacing(14)
         grid.setVerticalSpacing(4)
         for col, (key, label) in enumerate(COLUMNS):
             caption = QLabel(label)
             caption.setStyleSheet("font-size:13px; font-weight:900; color:#334155;")
             combo = QComboBox()
-            combo.setMinimumHeight(36)
+            combo.setMinimumHeight(38)
             combo.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(8)
+            combo.setMinimumContentsLength(20)
             combo.setStyleSheet(
                 "QComboBox { background:#FFFFFF; border:1px solid #CBD5E1; border-radius:7px; "
                 "padding:4px 8px; font-size:13px; font-weight:700; }"
@@ -94,11 +95,17 @@ class ContractorContractPickerDialog(QDialog):
             # Dates newest first; everything else alphabetically.
             for value in sorted(values, reverse=(key == "contract_date")):
                 combo.addItem(value, value)
+            # The open list is never narrower than its longest name.
+            combo.view().setMinimumWidth(combo.view().sizeHintForColumn(0) + 40)
+            combo.setToolTip(label)
             combo.currentIndexChanged.connect(self.apply_filters)
+            combo.currentTextChanged.connect(combo.setToolTip)
             self.filters[key] = combo
-            grid.addWidget(caption, 0, col)
-            grid.addWidget(combo, 1, col)
-            grid.setColumnStretch(col, 1)
+            line, place = divmod(col, FILTERS_PER_ROW)
+            grid.addWidget(caption, line * 2, place)
+            grid.addWidget(combo, line * 2 + 1, place)
+        for place in range(FILTERS_PER_ROW):
+            grid.setColumnStretch(place, 1)
         root.addLayout(grid)
 
         self.table = QTableWidget()
@@ -109,10 +116,12 @@ class ContractorContractPickerDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.verticalHeader().setVisible(False)
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QHeaderView.Stretch)
-        for col in (0, 1):  # the number and the date: never cut off
-            header.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        # Equal shares of the width, but a column whose names need more keeps its need
+        # (a long contractor name is shown whole). Imported here: the report base
+        # imports the contracts screen, which imports this dialog.
+        from app.ui.screens.contracting_report_base import ColumnFitter
+
+        self.fitter = ColumnFitter(self.table)
         self.table.setStyleSheet(
             "QTableWidget { background:#FFFFFF; alternate-background-color:#F8FAFC; "
             "border:1px solid #E2E8F0; gridline-color:#E5E7EB; font-size:14px; }"
@@ -153,9 +162,12 @@ class ContractorContractPickerDialog(QDialog):
         self.table.setRowCount(len(self.visible_rows))
         for row_index, row in enumerate(self.visible_rows):
             for col_index, (key, _label) in enumerate(COLUMNS):
-                item = QTableWidgetItem(cell_text(row, key))
+                text = cell_text(row, key)
+                item = QTableWidgetItem(text)
+                item.setToolTip(text)  # a name still too long for its column
                 item.setTextAlignment(Qt.AlignCenter)
                 self.table.setItem(row_index, col_index, item)
+        self.fitter.fit()
         if self.visible_rows:
             self.table.selectRow(0)
             self.table.setCurrentCell(0, 0)
