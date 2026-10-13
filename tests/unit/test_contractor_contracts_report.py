@@ -38,6 +38,7 @@ from app.ui.screens.contractor_contracts_report_screen import (
     P_REMAINING_VALUE,
     P_STATUS,
     PROGRESS_HEADERS,
+    PROGRESS_KEYS,
     RED,
     BANDS,
     TAB_BANDS,
@@ -60,7 +61,8 @@ def _extract(contract_id, works, pct):
 
 
 CONTRACTS = [
-    _contract(1, (2026, 1, 12), 10, "الأفق للتطوير", 11, "برج الأفق", 1, "م. أحمد عبد الرحمن", "2500000", "10"),
+    {**_contract(1, (2026, 1, 12), 10, "الأفق للتطوير", 11, "برج الأفق", 1, "م. أحمد عبد الرحمن", "2500000", "10"),
+     "contract_name": "أعمال الخرسانة"},
     _contract(2, (2026, 3, 15), 20, "الدلتا العقارية", 21, "كمبوند الياسمين", 2, "م. محمود السيد", "1150000", "5"),
     _contract(3, (2026, 5, 10), 20, "الدلتا العقارية", 22, "مول الدلتا", 3, "الصفا للكهرباء", "1900000", "10"),
     _contract(4, (2026, 7, 1), 10, "الأفق للتطوير", 12, "فيلات الأفق", 1, "م. أحمد عبد الرحمن", "950000", "10"),
@@ -203,7 +205,7 @@ def test_progress_tab_has_the_users_columns_in_order(screen):
     headers = [screen.progress_table.horizontalHeaderItem(i).text().replace("\n", " ")
                for i in range(screen.progress_table.columnCount())]
     assert headers == [h.replace("\n", " ") for h in PROGRESS_HEADERS]
-    assert headers[:11] == ["تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
+    assert headers[:12] == ["العقد", "تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
                             "نسبة الدفعة المقدمة", "إجمالي المستخلصات", "إجمالي المقدمة المستقطعة",
                             "المصروف من الدفعات المقدمة", "المتبقي من قيمة العقد", "المتبقي من الدفعة المقدمة"]
 
@@ -211,19 +213,29 @@ def test_progress_tab_has_the_users_columns_in_order(screen):
 def test_progress_rows_and_totals(screen):
     table = screen.progress_table
     assert table.rowCount() == 5  # 4 contracts + الإجمالي
-    assert table.item(0, 0).text() == "2026-01-12"
-    assert table.item(0, 4).text() == "2,500,000.00"
-    assert table.item(0, 5).text() == "10%"
-    assert table.item(0, 7).text() == "145,000.00"
+    column = PROGRESS_KEYS.index
+    assert table.item(0, column("contract_date")).text() == "2026-01-12"
+    assert table.item(0, column("contract_value")).text() == "2,500,000.00"
+    assert table.item(0, column("advance_payment_pct")).text() == "10%"
+    assert table.item(0, column("advance_deducted")).text() == "145,000.00"
     cell = table.cellWidget(0, P_REMAINING_VALUE)
     assert cell.value_label.text() == "1,050,000.00" and cell.bar.value() == 58
     assert table.cellWidget(0, P_REMAINING_ADVANCE).value_label.text() == "105,000.00"
     assert table.item(3, P_STATUS).text() == STATUS_OVER
     total = table.rowCount() - 1
     assert "الإجمالي" in table.item(total, 0).text()
-    assert table.item(total, 4).text() == "6,500,000.00"
+    assert table.item(total, column("contract_value")).text() == "6,500,000.00"
     assert table.cellWidget(total, P_REMAINING_ADVANCE).value_label.text() == "288,000.00"
     assert screen.progress_count.text() == "عدد العقود: 4"
+
+
+def test_contract_column_is_number_and_name(screen):
+    """«العقد» (2026-10-13): «رقم — اسم», the number alone when the contract has no name."""
+    for table, keys in ((screen.progress_table, PROGRESS_KEYS), (screen.band_table, BAND_KEYS)):
+        column = keys.index("contract_label")
+        assert column == 0 and table.horizontalHeaderItem(column).text() == "العقد"
+        assert table.item(0, column).text() == "A-H/CT-1001 — أعمال الخرسانة"
+        assert table.item(1, column).text() == "A-H/CT-1002"
 
 
 def test_negative_remainders_are_red(screen):
@@ -308,7 +320,8 @@ def test_rerun_with_fewer_rows_leaves_no_stale_widgets(screen):
     assert "الإجمالي" in table.item(2, 0).text()
     assert table.cellWidget(2, P_REMAINING_VALUE).value_label.text() == "980,000.00"
     # the totals row must not keep a data row's rate or status from the longer run before
-    assert table.item(2, 5).text() == "" and table.item(2, P_STATUS).text() == ""
+    assert table.item(2, PROGRESS_KEYS.index("advance_payment_pct")).text() == ""
+    assert table.item(2, P_STATUS).text() == ""
     bands = screen.band_table
     assert bands.item(2, BAND_KEYS.index("advance_payment_pct")).text() == ""
 

@@ -96,6 +96,12 @@ def _clean(value: Any) -> str:
     return str(value if value is not None else "").strip()
 
 
+def contract_label(row: dict[str, Any]) -> str:
+    """The reports' «العقد» cell (user, 2026-10-13): «رقم — اسم», the number alone when unnamed."""
+    number, name = _clean(row.get("contract_no")), _clean(row.get("contract_name"))
+    return f"{number} — {name}" if number and name else number or name
+
+
 class ContractorContractService:
     def __init__(self, db: Database | None = None) -> None:
         self._db = db or Database()

@@ -1,7 +1,7 @@
 """Data and arithmetic for تقرير عقود المقاولين (the first contracting report).
 
-One row per contract, with the user's columns: تاريخ العقد، اسم الشركة، اسم
-المشروع، اسم المقاول، قيمة العقد، نسبة الدفعة المقدمة، إجمالي المستخلصات، إجمالي
+One row per contract, with the user's columns: العقد (``contract_label``: «رقم —
+اسم», 2026-10-13)، تاريخ العقد، اسم الشركة، اسم المشروع، اسم المقاول، قيمة العقد، نسبة الدفعة المقدمة، إجمالي المستخلصات، إجمالي
 المقدمة المستقطعة، المتبقي من قيمة العقد، المتبقي من الدفعة المقدمة.
 
 * إجمالي المستخلصات = sum of the contract's ``works_value`` (إجمالي المستخلص).
@@ -32,7 +32,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from app.database.db import Database
-from app.services.contractor_contract_service import to_decimal
+from app.services.contractor_contract_service import contract_label, to_decimal
 from app.services.contractor_extract_service import extract_amounts
 from app.services.contractor_payment_service import ADVANCE_PAYMENT
 
@@ -123,6 +123,7 @@ def report_row(contract: dict[str, Any], extracts: list[dict[str, Any]],
     agreed = _money(value * pct / 100)
     return {
         **contract,
+        "contract_label": contract_label(contract),
         "contract_value": value,
         "advance_payment_pct": pct,
         "extracts_count": len(extracts),
@@ -199,8 +200,8 @@ class ContractorContractsReportService:
                 where.append(clause)
                 params.append(value)
         contracts = self._db.fetch_all(
-            "SELECT k.contract_id, k.contract_no, k.contract_date, k.contract_value, k.advance_payment_pct, "
-            "k.contractor_id, d.contractor_name, k.project_id, p.project_name, p.company_id, c.company_name "
+            "SELECT k.contract_id, k.contract_no, k.contract_name, k.contract_date, k.contract_value, "
+            "k.advance_payment_pct, k.contractor_id, d.contractor_name, k.project_id, p.project_name, p.company_id, c.company_name "
             "FROM contractor_contracts k "
             "JOIN contractors d ON d.contractor_id = k.contractor_id "
             "JOIN company_projects p ON p.project_id = k.project_id "

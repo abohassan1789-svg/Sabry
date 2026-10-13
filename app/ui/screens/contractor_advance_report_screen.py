@@ -8,7 +8,8 @@ The user picked two of the ten mockups and asked for both as tabs, 7 first:
 * «تفاصيل تحت الصف» (نموذج 6): a click opens the same list right under the
   contract's row; another click closes it.
 
-Both tabs show the same lines and totals. «تحديد أعمدة الجدول» sits above the
+Both tabs show the same lines and totals; «العقد» (رقم — اسم, 2026-10-13) leads
+the columns and names the contract in the popup and the inline title. «تحديد أعمدة الجدول» sits above the
 tabs and applies to both; the choice is kept per user. Every figure comes from
 ``contractor_advance_report_service``.
 """
@@ -64,8 +65,9 @@ SETTINGS_KEY = "contractor_advance_report/columns"
 TAB_POPUP, TAB_INLINE = 0, 1
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
-# The user's 9 columns in their order: (row key, header, kind).
+# The user's columns in their order: (row key, header, kind).
 COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("contract_label", "العقد", TEXT_COL),  # رقم — اسم (2026-10-13)
     ("contract_date", "تاريخ العقد", TEXT_COL),
     ("company_name", "اسم الشركة", TEXT_COL),
     ("project_name", "اسم المشروع", TEXT_COL),
@@ -90,7 +92,7 @@ CARDS = (
     ("advance_paid_out", "إجمالي المصروف من الدفعات"),
     ("remaining_advance", "إجمالي المتبقي"),
 )
-COLUMN_GROUPS = (("بيانات العقد", COLUMN_KEYS[:4]), ("الدفعة المقدمة", COLUMN_KEYS[4:]))
+COLUMN_GROUPS = (("بيانات العقد", COLUMN_KEYS[:5]), ("الدفعة المقدمة", COLUMN_KEYS[5:]))
 
 # The popup's columns: the user's list, with رقم المستخلص after التاريخ (user asked 2026-09-26).
 LINE_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -263,7 +265,7 @@ class AdvanceStatementDialog(QDialog):
         super().__init__(parent)
         self.contract = contract
         self.lines = lines
-        self.setWindowTitle(f"كشف حساب الدفعة المقدمة — {contract.get('contract_no') or ''}")
+        self.setWindowTitle(f"كشف حساب الدفعة المقدمة — {contract.get('contract_label') or ''}")
         self.setLayoutDirection(Qt.RightToLeft)
         self.setStyleSheet("QDialog { background:#FFFFFF; } QLabel { background:transparent; }")
         self.setMinimumWidth(1180)
@@ -271,7 +273,7 @@ class AdvanceStatementDialog(QDialog):
         layout.setContentsMargins(20, 16, 20, 16)
         layout.setSpacing(12)
 
-        title = QLabel(f"كشف حساب الدفعة المقدمة — {contract.get('contract_no') or ''}")
+        title = QLabel(f"كشف حساب الدفعة المقدمة — {contract.get('contract_label') or ''}")
         title.setStyleSheet(f"font-size:20px; font-weight:900; color:{TEXT};")
         subtitle = QLabel(f"{contract.get('contractor_name') or ''}  ·  {contract.get('project_name') or ''}  ·  "
                           f"{contract.get('company_name') or ''}  ·  تاريخ العقد {date_text(contract.get('contract_date'))}")
@@ -384,7 +386,7 @@ class InlineDetail(QFrame):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(6)
-        title = QLabel(f"الدفعة المقدمة المسددة من مستخلصات العقد {contract.get('contract_no') or ''} "
+        title = QLabel(f"الدفعة المقدمة المسددة من مستخلصات العقد {contract.get('contract_label') or ''} "
                        "والمصروف منها في الدفعات")
         title.setStyleSheet(f"font-size:13px; font-weight:900; color:{TEXT};")
         layout.addWidget(title)
@@ -413,7 +415,7 @@ class ContractorAdvanceReportScreen(ContractingReportBase):
         self.rows: list[dict[str, Any]] = []
         self.totals: dict[str, Any] = report_totals([])
         self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS,
-                                            added=("advance_paid_out",))
+                                            added=("advance_paid_out", "contract_label"))
         self.expanded: set[Any] = set()
         self.inline_kinds: list[tuple[str, Any]] = []
         self.dialog: AdvanceStatementDialog | None = None

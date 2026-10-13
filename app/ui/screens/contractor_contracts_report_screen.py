@@ -10,7 +10,8 @@ contracting screens, so they can choose one by using the real report:
   العقد، القيمة والتنفيذ، الدفعة المقدمة — with «قيمة الدفعة المقدمة» added so
   the advance remainder reads as a subtraction.
 
-Both tabs show the same filtered lines and the same totals row. Every figure
+Both tabs start with «العقد» (رقم — اسم, 2026-10-13) and show the same filtered
+lines and the same totals row. Every figure
 comes from ``contractor_contracts_report_service``.
 """
 
@@ -60,19 +61,19 @@ TAB_PROGRESS, TAB_BANDS = 0, 1
 
 # نموذج 7: the user's columns in their order, then «الحالة».
 PROGRESS_HEADERS = (
-    "تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد", "نسبة الدفعة\nالمقدمة",
+    "العقد", "تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد", "نسبة الدفعة\nالمقدمة",
     "إجمالي\nالمستخلصات", "إجمالي المقدمة\nالمستقطعة", "المصروف من\nالدفعات المقدمة", "المتبقي من\nقيمة العقد",
     "المتبقي من\nالدفعة المقدمة", "الحالة",
 )
 # The plain cells of نموذج 7, in column order (the two remainders and «الحالة» follow them).
-PROGRESS_KEYS = ("contract_date", "company_name", "project_name", "contractor_name", "contract_value",
+PROGRESS_KEYS = ("contract_label", "contract_date", "company_name", "project_name", "contractor_name", "contract_value",
                  "advance_payment_pct", "extracts_total", "advance_deducted", "advance_paid_out")
-P_REMAINING_VALUE, P_REMAINING_ADVANCE, P_STATUS = 9, 10, 11
+P_REMAINING_VALUE, P_REMAINING_ADVANCE, P_STATUS = range(len(PROGRESS_KEYS), len(PROGRESS_KEYS) + 3)
 
 # نموذج 5: (band title, band colours, its columns as (header, row key)).
 BANDS: tuple[tuple[str, tuple[str, str, str], tuple[tuple[str, str], ...]], ...] = (
     ("بيانات العقد", ("#E2E8F0", "#1E293B", "#FFFFFF"), (
-        ("تاريخ العقد", "contract_date"), ("اسم الشركة", "company_name"),
+        ("العقد", "contract_label"), ("تاريخ العقد", "contract_date"), ("اسم الشركة", "company_name"),
         ("اسم المشروع", "project_name"), ("اسم المقاول", "contractor_name"))),
     ("القيمة والتنفيذ", ("#DCFCE7", "#166534", "#F6FDF8"), (
         ("قيمة العقد", "contract_value"), ("إجمالي\nالمستخلصات", "extracts_total"),
@@ -83,7 +84,11 @@ BANDS: tuple[tuple[str, tuple[str, str, str], tuple[tuple[str, str], ...]], ...]
         ("المتبقي من\nالدفعة المقدمة", "remaining_advance"))),
 )
 BAND_KEYS = tuple(key for _title, _colors, columns in BANDS for _header, key in columns)
-NAME_KEYS = ("company_name", "project_name", "contractor_name")
+NAME_KEYS = ("contract_label", "company_name", "project_name", "contractor_name")
+# The names share the spare width; «العقد» keeps its own width, so رقم — اسم stays on one line.
+STRETCH_KEYS = NAME_KEYS[1:]
+# The totals row's «الإجمالي» spans the contract's identity columns.
+LABEL_SPAN = len(BANDS[0][2])
 
 # «الحالة»: (text colour, background).
 STATUS_COLORS = {
@@ -248,8 +253,8 @@ class ContractorContractsReportScreen(ContractingReportBase):
         layout.setSpacing(6)
         self.progress_table = self._new_table(PROGRESS_HEADERS)
         header = self.progress_table.horizontalHeader()
-        for column in (1, 2, 3):
-            header.setSectionResizeMode(column, QHeaderView.Stretch)
+        for key in STRETCH_KEYS:
+            header.setSectionResizeMode(PROGRESS_KEYS.index(key), QHeaderView.Stretch)
         for column in (P_REMAINING_VALUE, P_REMAINING_ADVANCE):
             header.setSectionResizeMode(column, QHeaderView.Fixed)
             self.progress_table.setColumnWidth(column, 200)
@@ -266,7 +271,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
         headers = tuple(text for _title, _colors, columns in BANDS for text, _key in columns)
         self.band_table = self._new_table(headers)
         for column, key in enumerate(BAND_KEYS):
-            if key in NAME_KEYS:
+            if key in STRETCH_KEYS:
                 self.band_table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Stretch)
         self.band_header = BandHeader(self.band_table)
         layout.addWidget(self.band_header)
@@ -315,12 +320,11 @@ class ContractorContractsReportScreen(ContractingReportBase):
             table.setItem(index, P_STATUS, status)
             table.setRowHeight(index, 46)
         last = len(self.rows)
-        for column, key in ((4, "contract_value"), (6, "extracts_total"), (7, "advance_deducted"),
-                            (8, "advance_paid_out")):
-            table.setItem(last, column, self._item(_money(self.totals[key]), bold=True,
-                                                   negative=self.totals[key] < 0))
+        for key in ("contract_value", "extracts_total", "advance_deducted", "advance_paid_out"):
+            table.setItem(last, PROGRESS_KEYS.index(key), self._item(_money(self.totals[key]), bold=True,
+                                                                     negative=self.totals[key] < 0))
         self._progress_cells(last, self.totals, bold=True)
-        self._total_row(table, last, 4)
+        self._total_row(table, last, LABEL_SPAN)
         table.setRowHeight(last, 48)
 
     def _progress_cells(self, index: int, row: dict[str, Any], bold: bool) -> None:
@@ -354,7 +358,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
             if key in self.totals:
                 table.setItem(last, column, self._item(_money(self.totals[key]), bold=True,
                                                        negative=self.totals[key] < 0))
-        self._total_row(table, last, 4)
+        self._total_row(table, last, LABEL_SPAN)
         table.setRowHeight(last, 42)
         self.band_header.sync()
         QTimer.singleShot(0, self.band_header.sync)  # after the columns settle

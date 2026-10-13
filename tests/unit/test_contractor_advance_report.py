@@ -59,7 +59,8 @@ def _extract(extract_id, contract_id, date, works, pct):
 
 
 CONTRACTS = [
-    _contract(1, 10, "الأفق للتطوير", 1, "م. أحمد عبد الرحمن", "2500000", "10"),   # advance 250,000
+    {**_contract(1, 10, "الأفق للتطوير", 1, "م. أحمد عبد الرحمن", "2500000", "10"),   # advance 250,000
+     "contract_name": "أعمال الخرسانة"},
     _contract(2, 20, "الدلتا العقارية", 2, "البناء الحديث", "1900000", "10"),        # no extracts
     _contract(3, 10, "الأفق للتطوير", 1, "م. أحمد عبد الرحمن", "950000", "10"),     # over: 102,000 > 95,000
 ]
@@ -182,7 +183,7 @@ def test_tabs_are_mockups_7_then_6(screen):
 def test_columns_are_the_users_in_order(screen):
     table = screen.popup_table
     headers = [table.horizontalHeaderItem(i).text().replace("\n", " ") for i in range(table.columnCount())]
-    assert headers == ["تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
+    assert headers == ["العقد", "تاريخ العقد", "اسم الشركة", "اسم المشروع", "اسم المقاول", "قيمة العقد",
                        "نسبة الدفعة المقدمة", "قيمة الدفعة المقدمة من العقد",
                        "إجمالي المسدد من الدفعة المقدمة", "المصروف من الدفعات المقدمة", "المتبقي"]
 
@@ -190,7 +191,9 @@ def test_columns_are_the_users_in_order(screen):
 def test_rows_and_totals(screen):
     table = screen.popup_table
     assert table.rowCount() == 4
-    assert table.item(0, 0).text() == "2026-01-10"
+    assert table.item(0, COLUMN_KEYS.index("contract_label")).text() == "A-H/CT-1001 — أعمال الخرسانة"
+    assert table.item(1, COLUMN_KEYS.index("contract_label")).text() == "A-H/CT-1002"
+    assert table.item(0, COLUMN_KEYS.index("contract_date")).text() == "2026-01-10"
     assert table.item(0, COLUMN_KEYS.index("advance_agreed")).text() == "250,000.00"
     assert table.item(0, COLUMN_KEYS.index("advance_deducted")).text() == "145,000.00"
     assert table.item(0, COLUMN_KEYS.index("remaining_advance")).text() == "105,000.00"
@@ -219,7 +222,7 @@ def test_click_opens_the_statement_window(screen):
     screen._popup_clicked(0, 3)
     dialog = screen.dialog
     assert dialog is not None and dialog.isVisible()
-    assert "A-H/CT-1001" in dialog.windowTitle()
+    assert dialog.windowTitle() == "كشف حساب الدفعة المقدمة — A-H/CT-1001 — أعمال الخرسانة"
     headers = [dialog.table.horizontalHeaderItem(i).text() for i in range(dialog.table.columnCount())]
     assert headers == ["التاريخ", "رقم المستخلص", "اسم المقاول", "اسم المشروع", "اسم الشركة",
                        "إجمالي المستخلص", "نسبة الدفعة المقدمة", "قيمة الدفعة المقدمة"]
@@ -270,17 +273,17 @@ def test_lines_are_fetched_once_per_run(screen):
 def test_column_chooser_covers_both_tabs_and_is_saved(qt_app, settings):
     first = ContractorAdvanceReportScreen(FakeService(), settings=settings)
     assert list(first.chooser.boxes) == list(COLUMN_KEYS)
-    assert first.columns_count.text() == "ظاهر 10 من 10 أعمدة"
+    assert first.columns_count.text() == "ظاهر 11 من 11 أعمدة"
     first.chooser.boxes["company_name"].setChecked(False)
     first.chooser.boxes["contract_value"].setChecked(False)
     assert _visible(first.popup_table) == _visible(first.inline_table, 1)
     assert "company_name" not in _visible(first.popup_table)
     assert not first.inline_table.isColumnHidden(0)  # the ＋/－ column always shows
-    assert first.columns_count.text() == "ظاهر 8 من 10 أعمدة"
+    assert first.columns_count.text() == "ظاهر 9 من 11 أعمدة"
     # the totals label moves to the first visible text column
     assert first.popup_table.item(3, 0).text() == "الإجمالي — 3 عقود"
-    first.set_visible_columns([k for k in COLUMN_KEYS if k != "contract_date"])
-    assert first.popup_table.item(3, 1).text() == "الإجمالي — 3 عقود"
+    first.set_visible_columns([k for k in COLUMN_KEYS if k not in ("contract_label", "contract_date")])
+    assert first.popup_table.item(3, 2).text() == "الإجمالي — 3 عقود"
     first.close()
     second = ContractorAdvanceReportScreen(FakeService(), settings=settings)
     assert "contract_date" not in _visible(second.popup_table)
