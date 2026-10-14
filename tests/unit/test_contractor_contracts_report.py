@@ -183,6 +183,12 @@ class FakeService:
         return [{"contract_id": c["contract_id"], "contract_label": contract_label(c)} for c in CONTRACTS
                 if company_id in (None, c["company_id"]) and contractor_id in (None, c["contractor_id"])]
 
+    def company_print_info(self, company_ids):
+        self.print_info_ids = list(company_ids)
+        return [{**c, "address": f"عنوان {c['company_name']}", "tax_registration_no": "100-200",
+                 "logo": None, "logo_mime": None}
+                for c in self.company_choices() if c["company_id"] in company_ids]
+
     def report(self, **filters):
         self.last_filters = filters
         contracts = [c for c in CONTRACTS
@@ -510,3 +516,68 @@ def test_the_column_choice_is_kept_per_user(qt_app, settings):
     second.chooser.default_button.click()
     assert second.visible_columns == COLUMN_KEYS
     second.close()
+
+
+# -- print / preview / PDF / Excel (phase 3, user 2026-10-14) -----------------------------
+
+
+def test_the_print_buttons_end_the_second_row(screen):
+    assert list(screen.print_buttons) == ["preview", "print", "pdf", "excel"]
+    assert [b.text() for b in screen.print_buttons.values()] == ["معاينة", "طباعة", "PDF", "Excel"]
+    assert all(button.isEnabled() for button in screen.print_buttons.values())
+
+
+def test_the_print_buttons_follow_the_print_and_export_permissions(qt_app, settings, monkeypatch):
+    from app.ui.screens import contracting_report_base
+
+    allowed = {"contracting.contractor_contracts_report.view", "contracting.contractor_contracts_report.filter",
+               "contracting.contractor_contracts_report.print"}
+    monkeypatch.setattr(contracting_report_base.SESSION, "can", lambda code: code in allowed)
+    widget = ContractorContractsReportScreen(FakeService(), settings=settings)
+    buttons = widget.print_buttons
+    assert buttons["preview"].isEnabled() and buttons["print"].isEnabled()
+    assert not buttons["pdf"].isEnabled() and not buttons["excel"].isEnabled()
+    widget.close()
+
+
+def test_each_company_prints_on_its_own_with_a_grand_total(screen):
+    document = screen.print_document()
+    assert [s.company["company_name"] for s in document.sections] == ["الأفق للتطوير", "الدلتا العقارية"]
+    assert [[r["contract_id"] for r in s.rows] for s in document.sections] == [[1, 4], [2, 3]]
+    assert document.sections[0].totals["contract_value"] == Decimal("3450000.00")
+    assert document.sections[0].company["tax_registration_no"] == "100-200"
+    assert document.grand_totals["contract_value"] == Decimal("6500000.00")
+    assert document.count_noun == "عقود"
+
+
+def test_one_company_has_no_grand_total(screen):
+    screen.company_combo.setCurrentIndex(screen.company_combo.findData(20))
+    document = screen.print_document()
+    assert [s.company["company_id"] for s in document.sections] == [20]
+    assert document.grand_totals is None
+
+
+def test_no_contracts_still_prints_the_chosen_companys_header(screen):
+    screen.contractor_combo.addItem("x", 99)
+    screen.contractor_combo.setCurrentIndex(screen.contractor_combo.count() - 1)
+    screen.company_combo.setCurrentIndex(screen.company_combo.findData(10))
+    document = screen.print_document()
+    assert len(document.sections) == 1 and document.sections[0].rows == []
+    assert document.sections[0].company["company_name"] == "الأفق للتطوير"
+
+
+def test_the_printed_columns_are_the_chosen_ones_in_mockup_4s_order(screen):
+    keys = [c.key for c in screen.print_document().columns]
+    assert keys == ["_serial", "contract_label", "contract_date", "project_name", "contractor_name",
+                    "contract_value", "advance_payment_pct", "advance_agreed", "extracts_total",
+                    "advance_deducted", "advance_paid_out", "remaining_value", "remaining_advance", "status"]
+    screen.set_visible_columns(["contract_label", "contractor_name", "contract_value", "status"])
+    assert [c.key for c in screen.print_document().columns] == [
+        "_serial", "contract_label", "contractor_name", "contract_value", "status"]
+
+
+def test_the_print_filters_name_the_choices(screen):
+    screen.all_dates.setChecked(False)
+    texts = dict(screen.print_document().filters)
+    assert texts["الفترة"].startswith("من ") and " إلى " in texts["الفترة"]
+    assert texts["المقاول"] == "الكل" and texts["العقد"] == "الكل"

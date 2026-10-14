@@ -4,9 +4,11 @@ The filter bar is «كل الفترات», من/إلى، الشركة → الم
 follows the company)، المقاول, then عرض التقرير / تحديث / خروج. A report that sets
 ``CONTRACT_FILTER`` adds a second row with «العقد» (user, 2026-10-13): its list
 follows the company, project and contractor, and the report's service gets
-``contract_id``. A report subclass sets ``TITLE``, ``ICON`` and
-``PERMISSION_BASE``, builds the rest in ``_build_body`` and fills it in
-``run_report``.
+``contract_id``. A report that sets ``PRINTABLE`` (phase 3, user 2026-10-14) gets
+معاينة / طباعة / PDF / Excel at the end of that second row and returns its
+``PrintDocument`` from ``print_document`` (:mod:`app.reports.contracting_print`).
+A report subclass sets ``TITLE``, ``ICON`` and ``PERMISSION_BASE``, builds the
+rest in ``_build_body`` and fills it in ``run_report``.
 """
 
 from __future__ import annotations
@@ -312,6 +314,7 @@ class ContractingReportBase(QWidget):
     ICON = "📈"
     PERMISSION_BASE = ""
     CONTRACT_FILTER = False  # «العقد» on a second filter row; the service takes ``contract_id``
+    PRINTABLE = False  # معاينة / طباعة / PDF / Excel on the second row; see ``print_document``
 
     def __init__(self, service: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -441,13 +444,17 @@ class ContractingReportBase(QWidget):
             button.setStyleSheet(_button_style(bg, hover))
             layout.addWidget(button)
         self.contract_combo: QComboBox | None = None
-        if self.CONTRACT_FILTER:
+        self.print_buttons: dict[str, QPushButton] = {}
+        if self.CONTRACT_FILTER or self.PRINTABLE:
             second = QHBoxLayout()
             second.setSpacing(8)
-            self.contract_combo = self._combo(460)
-            second.addWidget(self._caption("العقد"))
-            second.addWidget(self.contract_combo)
+            if self.CONTRACT_FILTER:
+                self.contract_combo = self._combo(460)
+                second.addWidget(self._caption("العقد"))
+                second.addWidget(self.contract_combo)
             second.addStretch(1)
+            if self.PRINTABLE:
+                self._build_print_buttons(second)
             rows.addLayout(second)
 
         self.all_dates.toggled.connect(self._sync_dates)
@@ -465,6 +472,74 @@ class ContractingReportBase(QWidget):
                 widget.setEnabled(self._perm_filter)
         self._sync_dates()
         return bar
+
+    def _build_print_buttons(self, row: QHBoxLayout) -> None:
+        can_print = SESSION.can(f"{self.PERMISSION_BASE}.print")
+        can_export = SESSION.can(f"{self.PERMISSION_BASE}.export")
+        for key, text, colors, action, allowed in (
+            ("preview", "معاينة", ("#0E5A66", "#0B4A54"), self.preview_report, can_print or can_export),
+            ("print", "طباعة", ("#1A7A3C", "#166534"), self.print_report, can_print),
+            ("pdf", "PDF", ("#B91C1C", "#991B1B"), self.export_pdf, can_export),
+            ("excel", "Excel", ("#15803D", "#166534"), self.export_excel, can_export),
+        ):
+            button = QPushButton(text)
+            button.setFixedHeight(38)
+            button.setMinimumWidth(84)
+            button.setStyleSheet(_button_style(*colors))
+            button.setEnabled(allowed)
+            button.clicked.connect(action)
+            row.addWidget(button)
+            self.print_buttons[key] = button
+
+    # -- print / export (PRINTABLE reports) ------------------------------------------
+
+    def print_document(self) -> Any:
+        """The report as a ``contracting_print.PrintDocument`` (what the screen shows now)."""
+        raise NotImplementedError
+
+    def filter_texts(self) -> list[tuple[str, str]]:
+        """The filters as printed under the header (the company is in the header itself)."""
+        period = ("كل الفترات" if self.all_dates.isChecked() else
+                  f"من {self.date_from.date().toString('yyyy-MM-dd')} إلى {self.date_to.date().toString('yyyy-MM-dd')}")
+        texts = [("الفترة", period), ("المشروع", self.project_combo.currentText() or "الكل"),
+                 ("المقاول", self.contractor_combo.currentText() or "الكل")]
+        if self.contract_combo is not None:
+            texts.append(("العقد", self.contract_combo.currentText() or "الكل"))
+        return texts
+
+    def _with_document(self, action: Callable[[Any], None]) -> None:
+        try:
+            document = self.print_document()
+        except Exception as exc:  # noqa: BLE001 - shown to the user, never raised into Qt
+            QMessageBox.critical(self, "تعذّر تجهيز التقرير", str(exc))
+            return
+        action(document)
+
+    def preview_report(self) -> None:
+        from app.reports import contracting_print
+
+        def show(document: Any) -> None:
+            dialog = contracting_print.preview_dialog(
+                self, document, SESSION.can(f"{self.PERMISSION_BASE}.print"),
+                SESSION.can(f"{self.PERMISSION_BASE}.export"))
+            dialog.exec()
+
+        self._with_document(show)
+
+    def print_report(self) -> None:
+        from app.reports import contracting_print
+
+        self._with_document(lambda document: contracting_print.print_report(self, document))
+
+    def export_pdf(self) -> None:
+        from app.reports import contracting_print
+
+        self._with_document(lambda document: contracting_print.export_pdf(self, document))
+
+    def export_excel(self) -> None:
+        from app.reports import contracting_print
+
+        self._with_document(lambda document: contracting_print.save_excel(self, document))
 
     def _sync_dates(self) -> None:
         for edit in (self.date_from, self.date_to):

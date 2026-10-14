@@ -14,6 +14,11 @@ Both tabs start with «العقد» (رقم — اسم, 2026-10-13) and show the
 lines and the same totals row. «تحديد أعمدة الجدول» sits above the tabs and applies
 to both (user, 2026-10-14); every column starts shown and the choice is kept per user. Every figure
 comes from ``contractor_contracts_report_service``.
+
+معاينة / طباعة / PDF / Excel (phase 3, user 2026-10-14) print نموذج 4 «ثلاث خانات»
+(:mod:`app.reports.contracting_print`): the chosen columns in the mockup's order,
+each company on its own pages under its own header. «اسم الشركة» never prints as
+a column — the company is in the header of its pages.
 """
 
 from __future__ import annotations
@@ -36,6 +41,16 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.reports.contracting_print import (
+    DATE,
+    MONEY,
+    PCT,
+    SERIAL,
+    PrintColumn,
+    PrintDocument,
+    PrintSection,
+)
+from app.security.session_context import SESSION
 from app.services.contractor_contracts_report_service import (
     STATUS_DONE,
     STATUS_NOT_STARTED,
@@ -109,6 +124,23 @@ COLUMN_GROUPS = (
 )
 COLUMN_KEYS = tuple(key for _title, keys in COLUMN_GROUPS for key in keys)
 DEFAULT_COLUMNS = COLUMN_KEYS  # every column shows until the user picks (2026-10-14)
+
+# The printed columns, in نموذج 4's order (user, 2026-10-14); only the visible ones print.
+PRINT_COLUMNS = (
+    PrintColumn("contract_label", "العقد", width=118),
+    PrintColumn("contract_date", "تاريخ العقد", DATE, 78),
+    PrintColumn("project_name", "المشروع"),
+    PrintColumn("contractor_name", "المقاول"),
+    PrintColumn("contract_value", "قيمة العقد", MONEY),
+    PrintColumn("advance_payment_pct", "نسبة المقدمة", PCT, 54),
+    PrintColumn("advance_agreed", "قيمة المقدمة", MONEY),
+    PrintColumn("extracts_total", "إجمالي المستخلصات", MONEY),
+    PrintColumn("advance_deducted", "المقدمة المستقطعة", MONEY),
+    PrintColumn("advance_paid_out", "المصروف من الدفعات المقدمة", MONEY),
+    PrintColumn("remaining_value", "المتبقي من العقد", MONEY),
+    PrintColumn("remaining_advance", "المتبقي من المقدمة", MONEY),
+    PrintColumn("status", "الحالة", width=64),
+)
 
 # «الحالة»: (text colour, background).
 STATUS_COLORS = {
@@ -234,6 +266,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
     ICON = "📈"
     PERMISSION_BASE = PERMISSION_BASE
     CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
+    PRINTABLE = True  # معاينة / طباعة / PDF / Excel (user, 2026-10-14)
 
     def __init__(self, service: ContractorContractsReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -403,6 +436,38 @@ class ContractorContractsReportScreen(ContractingReportBase):
             self.progress_table.setCellWidget(
                 index, column, ProgressCell(f"{caption} {_whole_pct(percent)}%", row[key], percent, color, bold)
             )
+
+    # -- print / export ----------------------------------------------------------------
+
+    def print_document(self) -> PrintDocument:
+        """What prints: the report for the current filters (run again, so the header and
+        the lines always agree), one section per company."""
+        self.run_report()
+        columns = [SERIAL] + [column for column in PRINT_COLUMNS if column.key in self.visible_columns]
+        by_company: dict[Any, list[dict[str, Any]]] = {}
+        for row in self.rows:
+            by_company.setdefault(row["company_id"], []).append(row)
+        chosen = self.company_combo.currentData()
+        ids = list(by_company) or ([chosen] if chosen not in (None, "") else [])
+        companies = self.service.company_print_info(ids)
+        if by_company:
+            sections = [PrintSection(company, by_company[company["company_id"]],
+                                     report_totals(by_company[company["company_id"]]))
+                        for company in companies if company["company_id"] in by_company]
+        else:
+            sections = [PrintSection(companies[0] if companies else {"company_name": "كل الشركات"}, [],
+                                     report_totals([]))]
+        user = (SESSION.user or {}).get("username") if SESSION.user else None
+        return PrintDocument(
+            title=self.TITLE,
+            subtitle="قيمة العقود والمستخلصات والدفعة المقدمة",
+            count_noun="عقود",
+            filters=self.filter_texts(),
+            columns=columns,
+            sections=sections,
+            grand_totals=self.totals if len(sections) > 1 else None,
+            printed_by=user or "",
+        )
 
     def _fill_bands(self) -> None:
         table = self.band_table

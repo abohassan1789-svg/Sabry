@@ -205,6 +205,17 @@ class ContractorContractsReportService:
         )
         return [{**row, "contract_label": contract_label(row)} for row in rows]
 
+    def company_print_info(self, company_ids: list[Any]) -> list[dict[str, Any]]:
+        """The print header of each company (user, 2026-10-14): name, address, السجل الضريبي
+        and logo, from الشركات والمشاريع, in company-code order."""
+        if not company_ids:
+            return []
+        return self._db.fetch_all(
+            "SELECT company_id, company_code, company_name, address, tax_registration_no, logo, logo_mime "
+            "FROM client_companies WHERE company_id = ANY(%s) ORDER BY company_code",
+            [list(company_ids)],
+        )
+
     # -- the report ------------------------------------------------------------
 
     def report(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
