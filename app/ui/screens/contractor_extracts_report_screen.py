@@ -8,6 +8,10 @@
 * The rows are grouped by contractor (or company, or project, or not at all).
   Each group opens and closes by a click on its row: open, it shows a title row,
   its extracts and «إجمالي …»; closed, one row with its totals.
+* «إظهار تفاصيل الخصومات» (user, 2026-10-14, as in كشف حساب مقاول): a line under
+  each extract per «خصومات أخرى» (النوع — السبب، المبلغ), with إجمالي الخصومات
+  beside the button; kept per user. The «الخصومات الأخرى» card's tooltip adds
+  the deductions up per type. No figure changes: they are already in الصافي.
 
 Every figure comes from ``contractor_extracts_report_service``.
 """
@@ -31,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.services.contractor_extract_service import deductions_by_type
 from app.services.contractor_extracts_report_service import (
     GROUP_COMPANY,
     GROUP_CONTRACTOR,
@@ -42,6 +47,8 @@ from app.services.contractor_extracts_report_service import (
 )
 from app.ui.common.theme import GREEN, TEXT, _button_style
 from app.ui.screens.contracting_report_base import (
+    DEDUCTION_BG,
+    DEDUCTION_COLOR,
     MUTED,
     RED,
     TABLE_QSS,
@@ -51,15 +58,20 @@ from app.ui.screens.contracting_report_base import (
     ContractingReportBase,
     column_button,
     date_text,
+    deduction_text,
+    deductions_toggle,
     load_columns,
+    load_flag,
     report_settings,
     save_columns,
+    save_flag,
     table_item,
 )
 from app.ui.screens.contractor_contracts_screen import _money, _rate_text
 
 PERMISSION_BASE = "contracting.contractor_extracts_report"
 SETTINGS_KEY = "contractor_extracts_report/columns"
+SHOW_DEDUCTIONS_KEY = "contractor_extracts_report/show_deductions"  # the details button, per user
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
 # The user's columns in their order: (row key, header, kind).
@@ -118,6 +130,7 @@ GROUP_MODES = (
 
 # Row kinds of the table, kept in ``row_kinds`` next to the group key.
 ROW_EXTRACT, ROW_GROUP, ROW_SUBTOTAL, ROW_COLLAPSED, ROW_TOTAL = "extract", "group", "subtotal", "collapsed", "total"
+ROW_DEDUCTION = "deduction"  # one «خصومات أخرى» line under its extract (the details button)
 GROUP_BG = "#F1F5F9"
 SUBTOTAL_BG = "#F0FDF4"
 COLLAPSED_BG = "#FAFAF7"
@@ -157,6 +170,7 @@ class ContractorExtractsReportScreen(ContractingReportBase):
         self.row_kinds: list[tuple[str, Any]] = []
         self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS,
                                             added=("contract_label",))
+        self.show_deductions = load_flag(self.settings, SHOW_DEDUCTIONS_KEY)
         super().__init__(service or ContractorExtractsReportService(), parent)
 
     # -- layout ------------------------------------------------------------------------
@@ -206,6 +220,8 @@ class ContractorExtractsReportScreen(ContractingReportBase):
             inner.addWidget(caption)
             inner.addWidget(value)
             self.card_values[key] = value
+            if key == "other_deductions":
+                self.deductions_card = card  # its tooltip lists the deductions per type
             layout.addWidget(card, 1)
         return layout
 
@@ -246,6 +262,15 @@ class ContractorExtractsReportScreen(ContractingReportBase):
             layout.addWidget(button)
         self.expand_button.clicked.connect(self.expand_all)
         self.collapse_button.clicked.connect(self.collapse_all)
+        layout.addSpacing(18)
+        # الخصومات الأخرى تحت كل مستخلص, with their total beside the button (user, 2026-10-14).
+        self.deductions_toggle = deductions_toggle(self.show_deductions)
+        self.deductions_toggle.toggled.connect(self._on_deductions_toggled)
+        self.deductions_total = self._caption("")
+        self.deductions_total.setStyleSheet(f"font-size:13px; font-weight:900; color:{DEDUCTION_COLOR};")
+        layout.addWidget(self.deductions_toggle)
+        layout.addWidget(self.deductions_total)
+        self._update_deductions_button()
         layout.addStretch(1)
         self.count_label = self._caption("")
         layout.addWidget(self.count_label)
@@ -266,6 +291,25 @@ class ContractorExtractsReportScreen(ContractingReportBase):
         self.columns_count.setText(f"ظاهر {len(self.visible_columns)} من {len(COLUMNS)} عمود")
         self.chooser.sync(self.visible_columns)
         self.fitter.fit()
+
+    # -- الخصومات الأخرى -----------------------------------------------------------------
+
+    def _on_deductions_toggled(self, checked: bool) -> None:
+        self.show_deductions = checked
+        save_flag(self.settings, SHOW_DEDUCTIONS_KEY, checked)
+        self._update_deductions_button()
+        self._fill_table()
+
+    def _update_deductions_button(self) -> None:
+        self.deductions_toggle.setText("إخفاء تفاصيل الخصومات" if self.show_deductions else "إظهار تفاصيل الخصومات")
+        self.deductions_total.setText(f"إجمالي الخصومات: {_money(self.totals['other_deductions'])}")
+
+    def _update_deductions_card(self) -> None:
+        """The «الخصومات الأخرى» card's tooltip: the report's deductions per type, biggest first."""
+        types = deductions_by_type([line for row in self.rows for line in row.get("deductions") or []])
+        self.deductions_card.setToolTip(
+            "الخصومات الأخرى حسب النوع:\n" + "\n".join(f"{kind}: {_money(amount)}" for kind, amount in types)
+            if types else "مفيش خصومات أخرى في التقرير ده")
 
     # -- grouping ----------------------------------------------------------------------
 
@@ -304,6 +348,8 @@ class ContractorExtractsReportScreen(ContractingReportBase):
             label.setText(_money(self.totals[key]))
             label.setStyleSheet(self._card_styles[key] + (f" color:{RED};" if self.totals[key] < 0 else ""))
         self.count_label.setText(f"عدد المستخلصات: {self.totals['count']}")
+        self._update_deductions_button()
+        self._update_deductions_card()
         self._fill_table()
 
     def _label_columns(self) -> tuple[int, int]:
@@ -357,6 +403,30 @@ class ContractorExtractsReportScreen(ContractingReportBase):
             if key == "net":
                 item.setBackground(QBrush(QColor(NET_BG)))
             self.table.setItem(index, column, item)
+        if self.show_deductions:
+            for deduction in row.get("deductions") or []:
+                self._add_deduction_row(row.get("extract_id"), deduction)
+
+    def _add_deduction_row(self, extract_id: Any, deduction: dict[str, Any]) -> None:
+        """«• النوع — السبب» across the text columns; the amount under «خصومات أخرى» when it is
+        shown, else in parentheses under صافي المستخلص, else after the text."""
+        index = self._new_row(ROW_DEDUCTION, extract_id, 26)
+        first, span = self._label_columns()
+        amount = _money(deduction.get("amount"))
+        if "other_deductions" in self.visible_columns:
+            target, shown = "other_deductions", amount
+        elif "net" in self.visible_columns:
+            target, shown = "net", f"({amount})"
+        else:
+            target, shown = None, ""
+        text = deduction_text(deduction) + ("" if target else f"  ({amount})")
+        for column, key in enumerate(COLUMN_KEYS):
+            item = table_item(text if column == first else (shown if key == target else ""))
+            item.setBackground(QBrush(QColor(DEDUCTION_BG)))
+            item.setForeground(QBrush(QColor(DEDUCTION_COLOR)))
+            self.table.setItem(index, column, item)
+        if span > 1:
+            self.table.setSpan(index, first, 1, span)
 
     def _add_title(self, key: Any, text: str) -> None:
         index = self._new_row(ROW_GROUP, key, 34)

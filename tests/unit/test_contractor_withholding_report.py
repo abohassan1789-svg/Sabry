@@ -74,7 +74,9 @@ class _Db:
 
     def fetch_all(self, sql, params=None):
         self.queries.append((sql, params))
-        return list(self.extracts)
+        if "contractor_extract_deductions" in sql:
+            return []
+        return [dict(x) for x in self.extracts]
 
 
 def test_service_reads_the_cards_the_filters_cover():

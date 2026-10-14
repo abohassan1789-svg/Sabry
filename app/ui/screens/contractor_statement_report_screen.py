@@ -34,7 +34,6 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
-    QPushButton,
     QTabBar,
     QTableWidget,
     QVBoxLayout,
@@ -56,6 +55,8 @@ from app.services.contractor_statement_report_service import (
 )
 from app.ui.common.theme import GREEN, TEXT
 from app.ui.screens.contracting_report_base import (
+    DEDUCTION_BG,
+    DEDUCTION_COLOR,
     MUTED,
     RED,
     TABLE_QSS,
@@ -65,6 +66,8 @@ from app.ui.screens.contracting_report_base import (
     ContractingReportBase,
     column_button,
     date_text,
+    deduction_text,
+    deductions_toggle,
     load_columns,
     load_flag,
     report_settings,
@@ -153,16 +156,8 @@ PAYMENT_BG = "#F3FAF5"
 BALANCE_BG = "#FFF8EA"
 NET_BG = "#ECFDF3"
 PAID_COLOR = "#15803D"
-DEDUCTION_BG = "#FEF6F6"
-DEDUCTION_COLOR = "#B91C1C"
 DEDUCTION_CARD_ROWS = 5  # types listed on the card; more fold into «باقي الأنواع»
 GENERAL_COLOR = "#0E7490"  # «دفعات عامة»: shown when «العقد» is chosen (user, 2026-10-13)
-
-
-def deduction_text(deduction: dict[str, Any]) -> str:
-    """«• غرامة تأخير — تأخير 5 أيام» (the reason only when there is one)."""
-    reason = str(deduction.get("reason") or "").strip()
-    return f"• {deduction.get('deduction_type') or ''}" + (f" — {reason}" if reason else "")
 
 
 def card_types(types: list[tuple[str, Any]], limit: int = DEDUCTION_CARD_ROWS) -> list[tuple[str, Any]]:
@@ -560,16 +555,7 @@ class ContractorStatementReportScreen(ContractingReportBase):
         layout.addWidget(self.columns_count)
         layout.addSpacing(12)
         # الخصومات الأخرى تحت كل مستخلص, with their total beside the button (user, 2026-10-11).
-        self.deductions_toggle = QPushButton("إظهار تفاصيل الخصومات")
-        self.deductions_toggle.setCheckable(True)
-        self.deductions_toggle.setChecked(self.show_deductions)
-        self.deductions_toggle.setCursor(Qt.PointingHandCursor)
-        self.deductions_toggle.setMinimumHeight(34)
-        self.deductions_toggle.setStyleSheet(
-            f"QPushButton {{ background:#FFFFFF; color:{DEDUCTION_COLOR}; border:1.5px solid {DEDUCTION_COLOR}; "
-            "border-radius:8px; padding:5px 14px; font-size:13px; font-weight:900; }"
-            f"QPushButton:checked {{ background:{DEDUCTION_COLOR}; color:#FFFFFF; }}"
-        )
+        self.deductions_toggle = deductions_toggle(self.show_deductions)
         self.deductions_toggle.toggled.connect(self._on_deductions_toggled)
         self.deductions_total = self._caption("")
         self.deductions_total.setStyleSheet(f"font-size:13px; font-weight:900; color:{DEDUCTION_COLOR};")

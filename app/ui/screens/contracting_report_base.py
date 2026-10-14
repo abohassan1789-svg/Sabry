@@ -44,6 +44,8 @@ from app.ui.screens.contractor_contracts_screen import _COMBO_QSS, _EDITOR_QSS, 
 MUTED = "#475569"
 RED = "#B91C1C"
 TOTAL_BG = "#DCFCE7"
+DEDUCTION_BG = "#FEF6F6"   # a «خصومات أخرى» line under its extract («إظهار تفاصيل الخصومات»)
+DEDUCTION_COLOR = "#B91C1C"
 
 TABLE_QSS = (
     "QTableWidget { border:1px solid #E5EAF0; font-size:13px; font-weight:700; gridline-color:#E5E7EB; "
@@ -52,6 +54,27 @@ TABLE_QSS = (
     "border-left:1px solid rgba(255,255,255,0.25); }"
     "QTableWidget::item:selected { background:#FEF3C7; color:#111827; }"
 )
+
+
+def deduction_text(deduction: dict[str, Any]) -> str:
+    """«• غرامة تأخير — تأخير 5 أيام» (the reason only when there is one)."""
+    reason = str(deduction.get("reason") or "").strip()
+    return f"• {deduction.get('deduction_type') or ''}" + (f" — {reason}" if reason else "")
+
+
+def deductions_toggle(checked: bool) -> QPushButton:
+    """The «إظهار / إخفاء تفاصيل الخصومات» button (كشف حساب مقاول، تقرير المستخلصات)."""
+    button = QPushButton()
+    button.setCheckable(True)
+    button.setChecked(checked)
+    button.setCursor(Qt.PointingHandCursor)
+    button.setMinimumHeight(34)
+    button.setStyleSheet(
+        f"QPushButton {{ background:#FFFFFF; color:{DEDUCTION_COLOR}; border:1.5px solid {DEDUCTION_COLOR}; "
+        "border-radius:8px; padding:5px 14px; font-size:13px; font-weight:900; }"
+        f"QPushButton:checked {{ background:{DEDUCTION_COLOR}; color:#FFFFFF; }}"
+    )
+    return button
 
 
 def date_text(value: Any) -> str:

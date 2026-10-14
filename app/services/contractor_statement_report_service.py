@@ -73,10 +73,10 @@ from app.services.contractor_payment_service import (
 )
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
 from app.services.contractor_extract_service import (
-    LEGACY_DEDUCTION_REASON,
-    LEGACY_DEDUCTION_TYPE,
+    attach_deduction_lines,
     deductions_by_type,
     extract_amounts,
+    extract_deductions,
 )
 
 KIND_EXTRACT, KIND_PAYMENT = "extract", "payment"
@@ -97,15 +97,6 @@ def _day(value: Any) -> datetime.date | None:
     if isinstance(value, datetime.datetime):
         return value.date()
     return value if isinstance(value, datetime.date) else None
-
-
-def extract_deductions(extract: dict[str, Any]) -> list[dict[str, Any]]:
-    """The extract's «خصومات أخرى» lines; a total saved before the detail reads as one line."""
-    lines = [dict(line) for line in extract.get("deductions") or []]
-    other = _money(to_decimal(extract.get("other_deductions")))
-    if not lines and other > 0:
-        lines = [{"deduction_type": LEGACY_DEDUCTION_TYPE, "reason": LEGACY_DEDUCTION_REASON, "amount": other}]
-    return lines
 
 
 def deductions_summary(lines: list[dict[str, Any]]) -> dict[str, Any]:
@@ -380,14 +371,4 @@ class ContractorStatementReportService(ContractorContractsReportService):
 
     def _attach_deductions(self, extracts: list[dict[str, Any]]) -> None:
         """Each extract's «خصومات أخرى» lines, in their order, as ``deductions``."""
-        ids = [x["extract_id"] for x in extracts]
-        rows = self._db.fetch_all(
-            "SELECT extract_id, deduction_type, reason, amount FROM contractor_extract_deductions "
-            "WHERE extract_id = ANY(%s) ORDER BY extract_id, line_no, deduction_id",
-            [ids],
-        ) if ids else []
-        by_extract: dict[Any, list[dict[str, Any]]] = {}
-        for row in rows:
-            by_extract.setdefault(row["extract_id"], []).append(dict(row))
-        for extract in extracts:
-            extract["deductions"] = by_extract.get(extract["extract_id"], [])
+        attach_deduction_lines(self._db, extracts)

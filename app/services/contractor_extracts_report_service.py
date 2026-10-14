@@ -18,7 +18,7 @@ from typing import Any
 
 from app.services.contractor_contract_service import contract_label, to_decimal
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService
-from app.services.contractor_extract_service import extract_amounts
+from app.services.contractor_extract_service import attach_deduction_lines, extract_amounts, extract_deductions
 
 # The amount columns, summed by ``report_totals`` and shown on the cards.
 AMOUNT_KEYS = ("works_value", "before_tax", "advance_payment", "withholding_tax", "works_insurance",
@@ -37,7 +37,7 @@ GROUP_KEYS = {
 def report_row(extract: dict[str, Any]) -> dict[str, Any]:
     """One report line: the extract's own fields, its rates and every computed amount."""
     amounts = extract_amounts(extract)
-    row = {**extract, "contract_label": contract_label(extract),
+    row = {**extract, "contract_label": contract_label(extract), "deductions": extract_deductions(extract),
            **{key: to_decimal(extract.get(key)) for key in RATE_KEYS}}
     row.update({key: amounts[key] for key in AMOUNT_KEYS})
     return row
@@ -95,4 +95,5 @@ class ContractorExtractsReportService(ContractorContractsReportService):
             + "ORDER BY x.extract_date, x.extract_no",
             params,
         )
+        attach_deduction_lines(self._db, extracts)  # «إظهار تفاصيل الخصومات» (user, 2026-10-14)
         return [report_row(extract) for extract in extracts]

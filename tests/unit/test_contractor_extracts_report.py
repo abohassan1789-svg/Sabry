@@ -61,8 +61,11 @@ def _extract(extract_id, date, company_id, company, project_id, project, contrac
 EXTRACTS = [
     {**_extract(1, (2026, 2, 15), 10, "الأفق للتطوير", 11, "برج الأفق", 1, "م. أحمد عبد الرحمن", "456000"),
      "contract_name": "أعمال الخرسانة"},
-    _extract(2, (2026, 2, 28), 10, "الأفق للتطوير", 11, "برج الأفق", 2, "الصفا للكهرباء", "185000",
-             advance="15", withholding="3", social="2.8", other="2500"),
+    {**_extract(2, (2026, 2, 28), 10, "الأفق للتطوير", 11, "برج الأفق", 2, "الصفا للكهرباء", "185000",
+                advance="15", withholding="3", social="2.8", other="2500"),
+     # «خصومات أخرى» in detail (2026-10-14); extract 4's 1,200 has none: a total saved before the detail
+     "deductions": [{"deduction_type": "غرامة تأخير", "reason": "تأخير 5 أيام", "amount": Decimal("2000")},
+                    {"deduction_type": "مياه وكهرباء", "reason": "", "amount": Decimal("500")}]},
     _extract(3, (2026, 3, 10), 20, "الدلتا العقارية", 21, "كمبوند الياسمين", 3, "البناء الحديث", "620000",
              social="3.6"),
     _extract(4, (2026, 3, 25), 10, "الأفق للتطوير", 12, "فيلات الأفق", 1, "م. أحمد عبد الرحمن", "380000",
@@ -113,7 +116,9 @@ class _RecordingDb:
 
     def fetch_all(self, query, params=None):
         self.calls.append((query, list(params or [])))
-        return EXTRACTS[:1]
+        if "contractor_extract_deductions" in query:
+            return []
+        return [dict(x) for x in EXTRACTS[:1]]  # copies: the report adds each one's deductions
 
 
 def test_the_period_filters_on_the_extract_date():
@@ -349,3 +354,88 @@ def test_the_refresh_button_reports_a_database_error_too(screen, monkeypatch):
     monkeypatch.setattr(screen.service, "contractor_choices", down)
     screen.refresh_button.click()
     assert shown and "database is down" in shown[0][1]
+
+
+# -- «إظهار تفاصيل الخصومات» (user, 2026-10-14) ---------------------------------------------
+
+from app.ui.screens.contractor_extracts_report_screen import ROW_DEDUCTION  # noqa: E402
+
+
+def _texts(screen, kind):
+    column = COLUMN_KEYS.index("extract_date")
+    return [screen.table.item(row, column).text()
+            for row, (k, _key) in enumerate(screen.row_kinds) if k == kind]
+
+
+def test_report_rows_carry_their_deduction_lines():
+    assert [line["deduction_type"] for line in report_row(EXTRACTS[1])["deductions"]] == ["غرامة تأخير",
+                                                                                         "مياه وكهرباء"]
+    legacy = report_row(EXTRACTS[3])["deductions"]
+    assert legacy == [{"deduction_type": "أخرى", "reason": "رصيد سابق قبل التفصيل", "amount": Decimal("1200.00")}]
+    assert report_row(EXTRACTS[0])["deductions"] == []
+
+
+class _Db:
+    def __init__(self):
+        self.queries = []
+
+    def fetch_all(self, sql, params=None):
+        self.queries.append((sql, params))
+        if "contractor_extract_deductions" in sql:
+            return [{"extract_id": 9, "deduction_type": "غرامة", "reason": "", "amount": Decimal("100")}]
+        return [{**EXTRACTS[0], "extract_id": 9, "other_deductions": Decimal("100")}]
+
+
+def test_service_reads_each_extracts_deduction_lines():
+    db = _Db()
+    rows = ContractorExtractsReportService(db).report()
+    sql, params = db.queries[1]
+    assert "contractor_extract_deductions" in sql and params == [[9]]
+    assert rows[0]["deductions"] == [{"extract_id": 9, "deduction_type": "غرامة", "reason": "",
+                                      "amount": Decimal("100")}]
+
+
+def test_the_details_button_starts_off_with_the_total_beside_it(screen):
+    assert not screen.deductions_toggle.isChecked()
+    assert screen.deductions_toggle.text() == "إظهار تفاصيل الخصومات"
+    assert screen.deductions_total.text() == "إجمالي الخصومات: 3,700.00"
+    assert ROW_DEDUCTION not in [kind for kind, _key in screen.row_kinds]
+
+
+def test_the_details_open_a_line_under_each_extract(screen):
+    screen.deductions_toggle.click()
+    assert screen.deductions_toggle.text() == "إخفاء تفاصيل الخصومات"
+    kinds = [kind for kind, _key in screen.row_kinds]
+    # البناء الحديث (none), الصفا للكهرباء (2 lines), م. أحمد عبد الرحمن (EX-04's old total as one line)
+    assert kinds == [ROW_GROUP, ROW_EXTRACT, ROW_SUBTOTAL,
+                     ROW_GROUP, ROW_EXTRACT, ROW_DEDUCTION, ROW_DEDUCTION, ROW_SUBTOTAL,
+                     ROW_GROUP, ROW_EXTRACT, ROW_EXTRACT, ROW_DEDUCTION, ROW_SUBTOTAL, ROW_TOTAL]
+    assert _texts(screen, ROW_DEDUCTION) == ["• غرامة تأخير — تأخير 5 أيام", "• مياه وكهرباء",
+                                             "• أخرى — رصيد سابق قبل التفصيل"]
+    first = kinds.index(ROW_DEDUCTION)
+    assert screen.table.item(first, COLUMN_KEYS.index("other_deductions")).text() == "2,000.00"
+    assert screen.table.item(first, COLUMN_KEYS.index("net")).text() == ""
+
+
+def test_without_the_deductions_column_the_amount_goes_under_the_net(screen):
+    screen.deductions_toggle.click()
+    screen.chooser.boxes["other_deductions"].setChecked(False)
+    first = [kind for kind, _key in screen.row_kinds].index(ROW_DEDUCTION)
+    assert screen.table.item(first, COLUMN_KEYS.index("net")).text() == "(2,000.00)"
+
+
+def test_a_closed_group_hides_its_details_and_the_choice_is_kept(qt_app, screen, settings):
+    screen.deductions_toggle.click()
+    screen.collapse_all()
+    assert ROW_DEDUCTION not in [kind for kind, _key in screen.row_kinds]
+    screen.set_group_mode(GROUP_NONE)
+    assert [kind for kind, _key in screen.row_kinds].count(ROW_DEDUCTION) == 3
+    again = ContractorExtractsReportScreen(FakeService(), settings=settings)
+    assert again.deductions_toggle.isChecked()
+    again.close()
+
+
+def test_the_deductions_card_lists_the_types(screen):
+    tip = screen.deductions_card.toolTip()
+    assert tip.splitlines() == ["الخصومات الأخرى حسب النوع:", "غرامة تأخير: 2,000.00", "أخرى: 1,200.00",
+                                "مياه وكهرباء: 500.00"]

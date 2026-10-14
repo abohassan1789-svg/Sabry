@@ -139,6 +139,31 @@ def deductions_total(lines: list[dict[str, Any]] | None) -> Decimal:
     return _money(sum((to_decimal(line.get("amount")) for line in lines or []), Decimal("0")))
 
 
+def extract_deductions(extract: dict[str, Any]) -> list[dict[str, Any]]:
+    """The extract's «خصومات أخرى» lines (its ``deductions``) for the reports; a total saved
+    before the detail reads as one line."""
+    lines = [dict(line) for line in extract.get("deductions") or []]
+    other = _money(to_decimal(extract.get("other_deductions")))
+    if not lines and other > 0:
+        lines = [{"deduction_type": LEGACY_DEDUCTION_TYPE, "reason": LEGACY_DEDUCTION_REASON, "amount": other}]
+    return lines
+
+
+def attach_deduction_lines(db: Any, extracts: list[dict[str, Any]]) -> None:
+    """Each of *extracts* gets its «خصومات أخرى» lines, in their order, as ``deductions``."""
+    ids = [x["extract_id"] for x in extracts]
+    rows = db.fetch_all(
+        "SELECT extract_id, deduction_type, reason, amount FROM contractor_extract_deductions "
+        "WHERE extract_id = ANY(%s) ORDER BY extract_id, line_no, deduction_id",
+        [ids],
+    ) if ids else []
+    by_extract: dict[Any, list[dict[str, Any]]] = {}
+    for row in rows:
+        by_extract.setdefault(row["extract_id"], []).append(dict(row))
+    for extract in extracts:
+        extract["deductions"] = by_extract.get(extract["extract_id"], [])
+
+
 def deductions_by_type(lines: list[dict[str, Any]] | None) -> list[tuple[str, Decimal]]:
     """(type, total) per deduction type, biggest first (the dialog's side panel)."""
     totals: dict[str, Decimal] = {}
