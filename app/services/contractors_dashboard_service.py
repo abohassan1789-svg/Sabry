@@ -12,8 +12,19 @@ One figure set per screen of «المقاولات», as the user listed them:
   advance taken off the extracts + the advance paid out (``advance_figures``).
 * الدفعات: the total paid and the contractor paid the most.
 
-Added in the mockups and kept: «المتبقي للمقاولين» = صافي المستخلصات − الدفعات,
-and the payments per طريقة الدفع.
+Added in the mockups and kept: the payments per طريقة الدفع.
+
+By نوع الحساب (user, 2026-10-14; «المتبقي للمقاولين» = صافي المستخلصات − كل الدفعات is
+gone): for each type what is due, what was paid out of it and what is left, worked out
+exactly as كشف حساب مقاول does for «الكل» (``accounts``):
+
+* رصيد جاري / تأمين أعمال / تأمينات اجتماعية: المستحق = رصيد أول المدة (the cards' field,
+  + that type's movements before «من») + what the period's extracts hold for it (صافي
+  المستخلص / تأمين الأعمال / التأمينات الاجتماعية); المدفوع = the period's payments of
+  that type; المتبقي = المستحق − المدفوع.
+* دفعة مقدمة: المستحق = the contracts' advance − what the extracts took back; المدفوع =
+  the «دفعة مقدمة» payments; المتبقي = المستحق − المدفوع — all up to «إلى», as the
+  statement's contracts card.
 
 The filters narrow every figure (user, 2026-10-14: «أي فلتر … كل النتائج تتأثر بيه»):
 
@@ -37,7 +48,8 @@ from typing import Any
 from app.services.contractor_contract_service import contract_amounts, to_decimal
 from app.services.contractor_contracts_report_service import ZERO, ContractorContractsReportService, _money
 from app.services.contractor_extract_service import extract_amounts
-from app.services.contractor_payment_service import ADVANCE_PAYMENT
+from app.services.contractor_payment_service import ACCOUNT_TYPES, ADVANCE_PAYMENT, EXTRACT_ACCOUNT_TYPES
+from app.services.contractor_statement_report_service import ContractorStatementReportService, empty_statement
 
 CONTRACTOR_TYPES = ("مقاول", "مورد", "استشاري", "دعاية وإعلان", "سمسار")
 PAYMENT_METHODS = ("نقدي", "شيك", "تحويل")
@@ -147,9 +159,26 @@ def advance_figures(extracts: dict[str, Any], payments: list[dict[str, Any]]) ->
     return {"deducted": deducted, "paid_out": paid_out, "total": deducted + paid_out}
 
 
+def account_figures(statement: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Per نوع الحساب (``ACCOUNT_TYPES`` order): ``{opening, held, due, paid, remaining}`` from a
+    كشف حساب مقاول *statement* (``ContractorStatementReportService.statement``)."""
+    figures: dict[str, dict[str, Any]] = {}
+    for account in EXTRACT_ACCOUNT_TYPES:
+        totals = statement["accounts"][account]["totals"]
+        figures[account] = {"opening": totals["opening"], "held": totals["held"],
+                            "due": totals["opening"] + totals["held"], "paid": totals["paid"],
+                            "remaining": totals["balance"]}
+    advance = statement["contracts"]
+    figures[ADVANCE_PAYMENT] = {"opening": advance["advance_agreed"], "held": -advance["advance_deducted"],
+                                "due": advance["advance_agreed"] - advance["advance_deducted"],
+                                "paid": advance["advance_paid"], "remaining": advance["remaining_advance"]}
+    return {account: figures[account] for account in ACCOUNT_TYPES}
+
+
 def build_dashboard(contractors: list[dict[str, Any]], companies: list[dict[str, Any]],
                     projects: list[dict[str, Any]], contracts: list[dict[str, Any]],
-                    extracts: list[dict[str, Any]], payments: list[dict[str, Any]]) -> dict[str, Any]:
+                    extracts: list[dict[str, Any]], payments: list[dict[str, Any]],
+                    statement: dict[str, Any] | None = None) -> dict[str, Any]:
     dashboard = {
         "contractors": contractors_figures(contractors),
         "companies": companies_figures(companies, projects),
@@ -157,8 +186,8 @@ def build_dashboard(contractors: list[dict[str, Any]], companies: list[dict[str,
         "extracts": extracts_figures(extracts),
         "payments": payments_figures(payments),
     }
-    dashboard["payments"]["remaining"] = dashboard["extracts"]["net"] - dashboard["payments"]["total"]
     dashboard["advance"] = advance_figures(dashboard["extracts"], payments)
+    dashboard["accounts"] = account_figures(statement or empty_statement())
     return dashboard
 
 
@@ -276,4 +305,7 @@ class ContractorsDashboardService(ContractorContractsReportService):
             "LEFT JOIN company_projects p ON p.project_id = y.project_id " + sql,  # a payment may have no project
             params,
         )
-        return build_dashboard(contractors, companies, projects, contracts, extracts, payments)
+        # By نوع الحساب: كشف حساب مقاول for «الكل» (or the chosen contractor) under the same filters.
+        statement = ContractorStatementReportService(self._db).statement(
+            date_from, date_to, company_id, project_id, contractor_id)
+        return build_dashboard(contractors, companies, projects, contracts, extracts, payments, statement)

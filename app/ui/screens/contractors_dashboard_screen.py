@@ -1,7 +1,9 @@
 """داشبورد المقاولين — نموذج 9 «داكن تنفيذي» and نموذج 8 «لوحة الترتيب» as two tabs
-(user, 2026-10-02), so the user picks one by using both.
+(user, 2026-10-02); both stay (user, 2026-10-14).
 
 The filter bar is the contracting reports' one: من/إلى، الشركة، المشروع، المقاول.
+The payments panel has a tile per نوع الحساب (user, 2026-10-14): what was paid out of
+it, with what was due and what is left under it.
 Every figure comes from ``contractors_dashboard_service``.
 """
 
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.services.contractors_dashboard_service import (
+    ACCOUNT_TYPES,
     PAYMENT_METHODS,
     ContractorsDashboardService,
     empty_dashboard,
@@ -33,6 +36,8 @@ from app.ui.screens.contractor_contracts_screen import _money
 
 PERMISSION_BASE = "contracting.contractors_dashboard"
 TAB_DARK, TAB_LEADERS = 0, 1
+ADVANCE = ACCOUNT_TYPES[-1]  # «دفعة مقدمة»
+ACCOUNT_KEYS = {account: f"a_{index}" for index, account in enumerate(ACCOUNT_TYPES)}  # tile per نوع الحساب
 RANK_ROWS = 5  # rows under each board's winner
 
 # Tile looks: (background, border, caption, value, negative value)
@@ -293,8 +298,7 @@ class ContractorsDashboardScreen(ContractingReportBase):
             ("💵 دفعات المقاولين", 3, (
                 ("p_total", "إجمالي الدفعات المدفوعة", "teal"),
                 ("p_top", "أكبر مقاول أخد فلوس", "gold"),
-                ("p_remaining", "المتبقي للمقاولين", "dark"),
-                *((f"p_{method}", f"دفعات {method}", "dark") for method in PAYMENT_METHODS))),
+                *((ACCOUNT_KEYS[account], f"مدفوع — {account}", "dark") for account in ACCOUNT_TYPES))),
         )
         for index, (title, columns, tiles) in enumerate(panels):
             frame, inner = _panel(title, dark=True)
@@ -423,10 +427,29 @@ class ContractorsDashboardScreen(ContractingReportBase):
             self.dark["p_top"].set(_money(top[1]), f"{top[0]} · {_count(top[2], 'دفعات')}")
         else:
             self.dark["p_top"].set("—", "لا توجد دفعات")
-        self.dark["p_remaining"].set(_money(p["remaining"]), "صافي المستخلصات − الدفعات", p["remaining"] < 0)
-        for method in PAYMENT_METHODS:
-            total, count = p["methods"].get(method, (0, 0))
-            self.dark[f"p_{method}"].set(_money(total), _count(count, "دفعات"))
+        # The payment-method tiles made room for the نوع الحساب ones: the methods sit in the tooltip.
+        self.dark["p_total"].setToolTip("\n".join(
+            f"دفعات {method}: {_money(total)} ({_count(count, 'دفعات')})"
+            for method, (total, count) in ((m, p["methods"].get(m, (0, 0))) for m in PAYMENT_METHODS)))
+        self._fill_accounts()
+
+    def _fill_accounts(self) -> None:
+        """A tile per نوع الحساب: the paid amount, «المستحق» and «المتبقي» under it."""
+        for account, figures in self.dashboard["accounts"].items():
+            tile = self.dark[ACCOUNT_KEYS[account]]
+            remaining = figures["remaining"]
+            tile.set(_money(figures["paid"]), f"المستحق {_money(figures['due'])}\nالمتبقي {_money(remaining)}")
+            hint_color = tile.look[4] if remaining < 0 else tile.look[2]
+            tile.hint.setStyleSheet(f"font-size:11px; font-weight:700; color:{hint_color};")
+            if account == ADVANCE:
+                first = (f"الدفعة المقدمة من العقود {_money(figures['opening'])}\n"
+                         f"− المخصوم على المستخلصات {_money(-figures['held'])}")
+            else:
+                first = f"رصيد أول المدة {_money(figures['opening'])}\n+ المستخلصات {_money(figures['held'])}"
+            tip = (f"{first}\n= المستحق {_money(figures['due'])}\n"
+                   f"− المدفوع {_money(figures['paid'])}\n= المتبقي {_money(remaining)}")
+            tile.setToolTip(tip)
+            tile.hint.setToolTip(tip)  # Tile.set gave the hint its own text as a tooltip
 
     def _fill_leaders(self) -> None:
         d = self.dashboard

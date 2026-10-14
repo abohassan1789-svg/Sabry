@@ -6,7 +6,7 @@ What the user asked each section to show (2026-10-02):
 * الشركات والمشاريع: عدد الشركات وعدد المشاريع لكل شركة.
 * العقود: العدد، أكبر عقد (المقاول والقيمة)، الدفعات المقدمة، تأمين الأعمال، الضرائب والخصومات، التأمينات.
 * المستخلصات: صافي الأعمال، إجمالي المستخلص، المقدمة، ضرائب الخصم، تأمين الأعمال، التأمينات، الخصومات الأخرى.
-* الدفعات: إجمالي المدفوع، أكبر مقاول أخد فلوس.
+* الدفعات: إجمالي المدفوع، أكبر مقاول أخد فلوس، وكارت لكل نوع حساب (2026-10-14).
 * فلتر بين تاريخين، الشركة، المشروع، المقاول.
 """
 
@@ -21,7 +21,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
 from PySide6.QtWidgets import QApplication
 
-from app.services.contractors_dashboard_service import build_dashboard, empty_dashboard
+from app.services.contractor_statement_report_service import (
+    _with_accounts,
+    build_accounts,
+    contract_advance,
+    withholding_total,
+)
+from app.services.contractors_dashboard_service import account_figures, build_dashboard, empty_dashboard
 from app.ui.screens.contractors_dashboard_screen import TAB_DARK, TAB_LEADERS, ContractorsDashboardScreen
 
 AHMED, SAFA, BENAA = "م. أحمد عبد الرحمن", "الصفا للكهرباء", "البناء الحديث"
@@ -112,13 +118,52 @@ def test_extracts_figures():
     assert x["ranking"][0][0] == AHMED
 
 
-def test_payments_top_payee_and_remaining():
+def test_payments_top_payee_and_methods():
     d = _dashboard()
     p = d["payments"]
     assert p["total"] == Decimal("330000.00") and p["count"] == 3
     assert p["top"] == (AHMED, Decimal("180000.00"), 2)
     assert p["methods"]["شيك"] == (Decimal("150000.00"), 1)
-    assert p["remaining"] == d["extracts"]["net"] - Decimal("330000.00")
+    assert "remaining" not in p  # «المتبقي للمقاولين» is gone (user, 2026-10-14)
+
+
+def _statement(date_from=None):
+    """كشف حساب مقاول for «الكل» over the sample: cards + extracts + typed payments."""
+    card = {"current_balance": Decimal("85000"), "works_insurance_amount": Decimal("22500"),
+            "social_insurance_amount": Decimal("4200")}
+    extracts = [{**x, "extract_id": i, "extract_date": datetime.date(2026, 3, i + 1)} for i, x in enumerate(EXTRACTS)]
+    payments = [{**p, "payment_id": i, "payment_date": datetime.date(2026, 4, i + 1)} for i, p in enumerate(PAYMENTS)]
+    payments.append({"contractor_name": SAFA, "amount": Decimal("5000"), "payment_method": "نقدي",
+                     "account_type": "تأمين أعمال", "payment_id": 9, "payment_date": datetime.date(2026, 4, 9)})
+    return _with_accounts(build_accounts(card, extracts, payments, date_from),
+                          contract_advance(CONTRACTS, extracts, None, payments), withholding_total(0, extracts))
+
+
+def test_each_account_type_has_due_paid_and_remaining():
+    """The user (2026-10-14): a tile per نوع الحساب, worked out as كشف حساب مقاول does."""
+    accounts = account_figures(_statement())
+    assert list(accounts) == ["رصيد جاري", "تأمين أعمال", "تأمينات اجتماعية", "دفعة مقدمة"]
+    net = _dashboard()["extracts"]["net"]
+    current = accounts["رصيد جاري"]
+    assert current["due"] == Decimal("85000.00") + net  # the cards + صافي المستخلصات
+    assert current["paid"] == Decimal("230000.00")      # 150,000 + 80,000; not the advance one
+    assert current["remaining"] == current["due"] - current["paid"]
+    works = accounts["تأمين أعمال"]
+    assert works["due"] == Decimal("22500.00") + Decimal("34200.00") and works["paid"] == Decimal("5000.00")
+    assert accounts["تأمينات اجتماعية"]["due"] == Decimal("4200.00") and accounts["تأمينات اجتماعية"]["paid"] == 0
+    advance = accounts["دفعة مقدمة"]
+    # 2,400,000 × 10% + 6,200,000 × 12% = 984,000, less the 68,400 the extracts took back
+    assert advance["due"] == Decimal("984000.00") - Decimal("68400.00")
+    assert advance["paid"] == Decimal("100000.00")
+    assert advance["remaining"] == Decimal("815600.00")
+
+
+def test_a_period_moves_the_earlier_movements_into_the_due():
+    """As the statement: what came before «من» is in رصيد أول المدة, so المتبقي is the same."""
+    whole, later = account_figures(_statement()), account_figures(_statement(datetime.date(2026, 4, 3)))
+    current = later["رصيد جاري"]
+    assert current["paid"] == Decimal("80000.00")  # the 150,000 of 2 April went into the opening
+    assert current["remaining"] == whole["رصيد جاري"]["remaining"]
 
 
 def test_the_advance_total_adds_the_advance_payments():
@@ -132,7 +177,7 @@ def test_empty_dashboard():
     d = empty_dashboard()
     assert d["contracts"]["biggest"] is None
     assert d["payments"]["top"] is None
-    assert d["payments"]["remaining"] == 0
+    assert all(figures["remaining"] == 0 for figures in d["accounts"].values())
 
 
 # -- every filter narrows every section (user, 2026-10-14) -------------------------------------
@@ -148,6 +193,11 @@ class RecordingDb:
         assert sql.count("%s") == len(params), sql
         self.queries.append((sql, list(params)))
         return []
+
+    def fetch_one(self, sql, params=()):  # the statement's cards
+        assert sql.count("%s") == len(params), sql
+        self.queries.append((sql, list(params)))
+        return {}
 
 
 def _run(**filters):
@@ -208,7 +258,7 @@ class FakeService:
         self.last_filters = filters
         if filters["contractor_id"] == 99:
             return empty_dashboard()
-        return _dashboard()
+        return {**_dashboard(), "accounts": account_figures(_statement())}
 
 
 @pytest.fixture(scope="module")
@@ -249,6 +299,19 @@ def test_dark_tab(screen):
     assert screen.dark["x_advance"].toolTip() == "مستخلصات 68,400.00 + دفعات مقدمة 100,000.00"
     assert screen.dark["p_top"].value.text() == "180,000.00"
     assert AHMED in screen.dark["p_top"].hint.text()
+    assert "p_remaining" not in screen.dark and "p_نقدي" not in screen.dark
+    assert "دفعات شيك: 150,000.00 (1 دفعات)" in screen.dark["p_total"].toolTip()
+
+
+def test_dark_tab_a_tile_per_account_type(screen):
+    tiles = [screen.dark[f"a_{index}"] for index in range(4)]
+    assert [tile.caption.text() for tile in tiles] == [
+        "مدفوع — رصيد جاري", "مدفوع — تأمين أعمال", "مدفوع — تأمينات اجتماعية", "مدفوع — دفعة مقدمة"]
+    assert tiles[0].value.text() == "230,000.00"
+    assert tiles[3].value.text() == "100,000.00"
+    assert tiles[3].hint.text() == "المستحق 915,600.00\nالمتبقي 815,600.00"
+    assert "المخصوم على المستخلصات 68,400.00" in tiles[3].toolTip()
+    assert tiles[1].toolTip().endswith("= المتبقي 51,700.00")
 
 
 def test_leaders_tab(screen):
