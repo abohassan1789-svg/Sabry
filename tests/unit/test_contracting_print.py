@@ -12,6 +12,7 @@ import datetime
 import io
 from decimal import Decimal
 
+import pytest
 from openpyxl import load_workbook
 
 from app.reports.contracting_print import (
@@ -147,3 +148,32 @@ def test_excel_one_rtl_sheet_per_company_with_the_header(tmp_path):
     assert "الإجمالي العام — كل الشركات" not in values
     last_values = [cell for row in book["شركة درة"].iter_rows(values_only=True) for cell in row if cell is not None]
     assert "الإجمالي العام — كل الشركات" in last_values and 2874319.92 in last_values
+
+
+def test_a_saved_excel_opens_straight_away(tmp_path, monkeypatch):
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+    from app.reports import contracting_print
+
+    QApplication.instance() or QApplication([])
+    target = tmp_path / "report.xlsx"
+    opened = []
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: pytest.fail("no message when it opens"))
+    contracting_print.save_excel(None, _document())
+    assert target.exists() and opened == [str(target).replace("\\", "/")]
+
+
+def test_the_pdf_opens_when_printing_finishes(monkeypatch):
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QApplication
+
+    from app.reports import contracting_print
+
+    QApplication.instance() or QApplication([])
+    opened = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
+    contracting_print._pdf_done(None, "C:/x/report.pdf", True)
+    assert opened == ["C:/x/report.pdf"]

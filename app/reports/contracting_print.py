@@ -20,6 +20,7 @@ The user's rules:
   «صفحة س من ص».
 * Excel carries the same header above the same table: one sheet per company,
   right-to-left, real numbers.
+* A saved PDF or Excel file opens straight away (user, 2026-10-14).
 
 One HTML document is previewed, printed and saved as PDF through Chromium
 (``QWebEngineView``), as in :mod:`app.ui.screens.tawrid_statement_print`.
@@ -486,11 +487,21 @@ def _ask_pdf_path(parent: Any, document: PrintDocument) -> str:
     return path
 
 
+def open_file(parent: Any, file_path: str) -> None:
+    """A saved PDF / Excel opens straight away in its program (user, 2026-10-14)."""
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QMessageBox
+
+    if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(file_path))):
+        QMessageBox.information(parent, "تم الحفظ", f"تم حفظ الملف، لكن تعذّر فتحه تلقائياً:\n{file_path}")
+
+
 def _pdf_done(parent: Any, file_path: str, success: bool) -> None:
     from PySide6.QtWidgets import QMessageBox
 
     if success:
-        QMessageBox.information(parent, "تم", f"تم حفظ التقرير PDF في:\n{file_path}")
+        open_file(parent, file_path)
     else:
         QMessageBox.warning(parent, "تعذّر التصدير", "حدث خطأ أثناء إنشاء ملف PDF.")
 
@@ -590,7 +601,7 @@ def save_excel(parent: Any, document: PrintDocument) -> None:
     except Exception as exc:  # noqa: BLE001 - shown to the user
         QMessageBox.warning(parent, "تعذّر التصدير", f"تعذّر حفظ ملف Excel:\n{exc}")
         return
-    QMessageBox.information(parent, "تم", f"تم حفظ التقرير Excel في:\n{path}")
+    open_file(parent, path)
 
 
 def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_export: bool) -> Any:
@@ -661,6 +672,6 @@ def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_ex
 __all__ = [
     "DATE", "MONEY", "PCT", "TEXT", "SERIAL",
     "PrintColumn", "PrintDocument", "PrintSection",
-    "build_html", "cell_text", "export_excel", "export_pdf", "label_span", "page_layout",
+    "build_html", "cell_text", "export_excel", "export_pdf", "label_span", "open_file", "page_layout",
     "preview_dialog", "print_report", "save_excel", "total_cells",
 ]
