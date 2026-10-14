@@ -7,6 +7,8 @@
   With التفاف النص on, the visible columns share the width equally and a long
   name wraps onto more lines instead of widening its column.
 * One row per approved extract, then a dark totals row.
+* معاينة / طباعة / PDF / Excel (phase 3, user 2026-10-14): نموذج 2 «الشريط الأخضر
+  الداكن» — see :mod:`app.reports.contractor_withholding_print`.
 
 Every figure comes from ``contractor_withholding_report_service``.
 """
@@ -28,6 +30,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.reports.contracting_print import DATE, MONEY, PCT, TEXT, PrintColumn
+from app.reports.contractor_withholding_print import (
+    WithholdingDocument,
+    WithholdingSection,
+    grand_figures,
+)
+from app.security.session_context import SESSION
 from app.services.contractor_withholding_report_service import (
     ContractorWithholdingReportService,
     empty_report,
@@ -77,6 +86,11 @@ COLUMN_GROUPS = (
     ("ضرائب الخصم", COLUMN_KEYS[8:]),
 )
 
+# The printed columns (the company is in the print header, never a column).
+PRINT_KIND = {"extract_date": DATE, TEXT_COL: TEXT, RATE_COL: PCT, AMOUNT_COL: MONEY}
+PRINT_COLUMNS = {key: PrintColumn(key, HEADER[key], PRINT_KIND.get(key, PRINT_KIND[kind]))
+                 for key, _header, kind in COLUMNS if key != "company_name"}
+
 # The band's figures, right to left: (key, caption, the sign before it).
 FIGURES = (
     ("works_value", "إجمالي المستخلص", ""),
@@ -114,6 +128,30 @@ def cell_text(row: dict[str, Any], key: str) -> str:
     return str(row.get(key) or "")
 
 
+def figure_hints(report: dict[str, Any], filters: dict[str, Any], cards: str) -> dict[str, str]:
+    """The small line under each of the band's figures; *cards* names whose cards make the opening."""
+    date_from = filters.get("date_from")
+    return {
+        "works_value": f"{report['totals']['count']} مستخلصات",
+        "before_tax": "قبل ضريبة القيمة المضافة",
+        "opening": f"{cards} + مستخلصات قبل {date_text(date_from)}" if date_from else f"من {cards}",
+        "withholding_tax": (f"من {date_text(date_from)} إلى {date_text(filters.get('date_to'))}"
+                            if date_from else "كل الفترات"),
+        "net": "رصيد أول المدة + ضرائب الخصم على المستخلصات",
+    }
+
+
+def report_figures(report: dict[str, Any]) -> dict[str, Any]:
+    totals = report["totals"]
+    return {"works_value": totals["works_value"], "before_tax": totals["before_tax"], "opening": report["opening"],
+            "withholding_tax": totals["withholding_tax"], "net": report["net"]}
+
+
+def one_contractor(filters: dict[str, Any]) -> bool:
+    """One contractor: chosen, or the one whose contract «العقد» picks (2026-10-13)."""
+    return filters.get("contractor_id") is not None or filters.get("contract_id") is not None
+
+
 class WrapFitter(ColumnFitter):
     """``ColumnFitter``, plus «التفاف النص»: when *wrap* is on the visible columns share the
     width by their headers alone (a long name wraps instead of widening its column) and
@@ -143,6 +181,7 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
     ICON = "🧾"
     PERMISSION_BASE = PERMISSION_BASE
     CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
+    PRINTABLE = True  # معاينة / طباعة / PDF / Excel (user, 2026-10-14)
 
     def __init__(self, service: ContractorWithholdingReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -286,22 +325,12 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
         filters = self.filters()
         self.data = self.service.withholding_report(**filters)
         totals = self.data["totals"]
-        values = {"works_value": totals["works_value"], "before_tax": totals["before_tax"],
-                  "opening": self.data["opening"], "withholding_tax": totals["withholding_tax"],
-                  "net": self.data["net"]}
-        for key, value in values.items():
+        for key, value in report_figures(self.data).items():
             self.figure_values[key].setText(_money(value))
-        # One contractor: chosen, or the one whose contract «العقد» picks (2026-10-13).
-        everyone = filters["contractor_id"] is None and filters.get("contract_id") is None
-        cards = "بطاقات كل المقاولين" if everyone else "بطاقة المقاول"
-        date_from = filters["date_from"]
-        self.figure_hints["works_value"].setText(f"{totals['count']} مستخلصات")
-        self.figure_hints["before_tax"].setText("قبل ضريبة القيمة المضافة")
-        self.figure_hints["opening"].setText(
-            f"{cards} + مستخلصات قبل {date_text(date_from)}" if date_from else f"من {cards}")
-        self.figure_hints["withholding_tax"].setText(
-            f"من {date_text(date_from)} إلى {date_text(filters['date_to'])}" if date_from else "كل الفترات")
-        self.figure_hints["net"].setText("رصيد أول المدة + ضرائب الخصم على المستخلصات")
+        everyone = not one_contractor(filters)
+        hints = figure_hints(self.data, filters, "بطاقات كل المقاولين" if everyone else "بطاقة المقاول")
+        for key, text in hints.items():
+            self.figure_hints[key].setText(text)
         who = "كل المقاولين — " if everyone else ""
         self.count_label.setText(f"{who}{totals['count']} مستخلصات")
         self._fill_table()
@@ -330,3 +359,34 @@ class ContractorWithholdingReportScreen(ContractingReportBase):
             item.setForeground(QBrush(QColor(TOTAL_TEXT_ROSE if key == "withholding_tax" else "#FFFFFF")))
             table.setItem(len(rows), column, item)
         self.fitter.fit()
+
+    # -- print / export: نموذج 2 «الشريط الأخضر الداكن» (user, 2026-10-14) ----------------
+
+    def print_document(self) -> WithholdingDocument:
+        """The report for the current filters (run again so the header and the lines agree),
+        each company on its own pages with its own band; «الإجمالي العام» after the last."""
+        self.run_report()
+        filters = self.filters()
+        keys = [key for key in COLUMN_KEYS if key in self.visible_columns and key in PRINT_COLUMNS]
+        columns = [PRINT_COLUMNS[key] for key in keys or PRINT_COLUMNS]
+        cards = "بطاقة المقاول" if one_contractor(filters) else "بطاقات مقاولي الشركة"
+        parts = self.service.withholding_by_company(**filters)
+        if not parts:  # nothing in any company: the screen's report under the chosen company
+            chosen = self.company_combo.currentData()
+            companies = self.service.company_print_info([chosen]) if chosen not in (None, "") else []
+            parts = [{"company": companies[0] if companies else {"company_name": "كل الشركات"}, "report": self.data}]
+        sections = [WithholdingSection(part["company"], part["report"]["rows"], part["report"]["totals"],
+                                       figures=report_figures(part["report"]),
+                                       hints=figure_hints(part["report"], filters, cards))
+                    for part in parts]
+        user = (SESSION.user or {}).get("username") if SESSION.user else None
+        return WithholdingDocument(
+            title=self.TITLE,
+            subtitle="ضرائب الخصم على مستخلصات المقاولين المعتمدة",
+            count_noun="مستخلصات",
+            filters=self.filter_texts(),
+            columns=columns,
+            sections=sections,
+            grand_totals=grand_figures(sections) if len(sections) > 1 else None,
+            printed_by=user or "",
+        )

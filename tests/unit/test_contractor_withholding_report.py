@@ -135,6 +135,18 @@ class FakeService:
         self.last_filters = filters
         return build_report(CARD, ROWS, filters["date_from"])
 
+    companies = [{"company_id": 10, "company_name": "الأفق للتطوير العقاري"},
+                 {"company_id": 11, "company_name": "شركة درة"}]
+
+    def withholding_by_company(self, **filters):
+        # the same contractor's card in both companies (user, 2026-10-14)
+        rows = (ROWS[:1], ROWS[1:])
+        return [{"company": company, "report": build_report(CARD, rows[index], filters["date_from"])}
+                for index, company in enumerate(self.companies)]
+
+    def company_print_info(self, ids):
+        return [{"company_id": cid, "company_name": "الأفق للتطوير العقاري"} for cid in ids]
+
 
 @pytest.fixture(scope="module")
 def qt_app():
@@ -230,3 +242,43 @@ def test_a_chosen_contract_reads_as_one_contractors_card(screen):
     screen.run_report()
     assert screen.service.last_filters["contract_id"] == 1
     assert not screen.count_label.text().startswith("كل المقاولين")
+
+
+# -- print / export: نموذج 2 «الشريط الأخضر الداكن» (user, 2026-10-14) -------------------------
+
+
+def test_print_buttons_are_on_the_report(screen):
+    assert set(screen.print_buttons) == {"preview", "print", "pdf", "excel"}
+
+
+def test_print_one_section_per_company_with_its_band_and_a_grand_total(screen):
+    document = screen.print_document()
+    assert [section.company["company_name"] for section in document.sections] == [
+        "الأفق للتطوير العقاري", "شركة درة"]
+    first, second = document.sections
+    assert first.figures["opening"] == Decimal("36000.00") and first.figures["net"] == Decimal("40000.00")
+    assert second.figures["opening"] == Decimal("36000.00") and second.figures["net"] == Decimal("40500.00")
+    assert first.hints["opening"] == "من بطاقات مقاولي الشركة"
+    assert document.grand_totals["opening"] == Decimal("72000.00")  # the card in both companies
+    assert document.grand_totals["count"] == 2
+    assert document.count_noun == "مستخلصات" and ("العقد", "الكل") in document.filters
+
+
+def test_print_follows_the_column_chooser_and_never_prints_the_company(screen):
+    keys = [column.key for column in screen.print_document().columns]
+    assert keys == [key for key in COLUMN_KEYS if key != "company_name"]
+    screen.set_visible_columns(["contractor_name", "company_name", "withholding_tax"])
+    assert [column.key for column in screen.print_document().columns] == ["contractor_name", "withholding_tax"]
+
+
+def test_print_one_company_has_no_grand_total(screen):
+    screen.service.companies = screen.service.companies[:1]
+    document = screen.print_document()
+    assert len(document.sections) == 1 and document.grand_totals is None
+
+
+def test_print_with_nothing_in_any_company_prints_the_screens_report(screen):
+    screen.service.companies = []
+    document = screen.print_document()
+    assert [section.company["company_name"] for section in document.sections] == ["كل الشركات"]
+    assert document.sections[0].figures["net"] == Decimal("44500.00")

@@ -296,6 +296,76 @@ _PAGINATE = """
 """
 
 
+# A report that prints its own way (كشف حساب الدفعة المقدمة، ضرائب الخصم): the ``.fixed``
+# parts of each ``.section`` (header, filter strip) repeat on every page; every other part
+# flows, moving whole to the next page when it does not fit; a ``.split`` part (a table) is
+# split between its rows, carrying its head along, and a continued part's ``.cap-text``
+# gets «(تابع)». Then «س من ص» on every page.
+FLOW_PAGINATE = """
+(function () {
+  var LIMIT = %(limit)d;
+  var pages = [];
+  function slice(list) { return Array.prototype.slice.call(list); }
+  slice(document.querySelectorAll('.section')).forEach(function (section) {
+    var parts = slice(section.children);
+    var fixed = parts.filter(function (el) { return el.classList.contains('fixed'); });
+    var flow = parts.filter(function (el) { return !el.classList.contains('fixed'); });
+    var page, count;
+    function newPage() {
+      page = document.createElement('div');
+      page.className = 'page';
+      fixed.forEach(function (el) { page.appendChild(el.cloneNode(true)); });
+      section.parentNode.insertBefore(page, section);
+      pages.push(page);
+      count = 0;  // flowing parts on the page
+    }
+    function over() { return page.offsetHeight > LIMIT; }
+    function split(el) {
+      var rows = slice(el.querySelectorAll('tbody tr'));
+      var shell = el.cloneNode(true);
+      shell.querySelector('tbody').innerHTML = '';
+      var part = shell.cloneNode(true), body = part.querySelector('tbody');
+      page.appendChild(part);
+      count += 1;
+      rows.forEach(function (row) {
+        body.appendChild(row);
+        if (!over() || (body.children.length === 1 && count === 1)) { return; }
+        body.removeChild(row);
+        var started = body.children.length > 0;
+        if (!started) { page.removeChild(part); }
+        newPage();
+        part = shell.cloneNode(true);
+        var title = part.querySelector('.cap-text');
+        if (started && title) { title.textContent += ' (تابع)'; }
+        body = part.querySelector('tbody');
+        page.appendChild(part);
+        count = 1;
+        body.appendChild(row);
+      });
+    }
+    newPage();
+    flow.forEach(function (el) {
+      if (el.classList.contains('split')) { split(el); return; }
+      page.appendChild(el);
+      if (!over()) { count += 1; return; }
+      page.removeChild(el);
+      if (count > 0) {
+        newPage();
+        page.appendChild(el);
+        if (!over()) { count += 1; return; }
+        page.removeChild(el);
+      }
+      split(el);
+    });
+    section.parentNode.removeChild(section);
+  });
+  pages.forEach(function (page, index) {
+    var cell = page.querySelector('.page-no');
+    if (cell) { cell.textContent = (index + 1) + ' من ' + pages.length; }
+  });
+})();
+"""
+
 def _cell_class(column: PrintColumn, value: Any) -> str:
     if column.kind not in (MONEY, PCT):
         return ' class="nw"' if column.nowrap else ""
@@ -849,7 +919,7 @@ def preview_dialog(parent: Any, document: Any, can_print: bool, can_export: bool
 
 
 __all__ = [
-    "DATE", "MONEY", "PCT", "TEXT", "SERIAL", "ROW", "GROUP", "SUBTOTAL", "DEDUCTION",
+    "DATE", "MONEY", "PCT", "TEXT", "SERIAL", "FLOW_PAGINATE", "ROW", "GROUP", "SUBTOTAL", "DEDUCTION",
     "PrintColumn", "PrintDocument", "PrintLine", "PrintSection", "deduction_cells", "font_px",
     "build_html", "cell_text", "document_excel", "document_html", "export_excel", "export_pdf", "label_span", "open_file", "page_layout",
     "preview_dialog", "print_report", "save_excel", "total_cells",

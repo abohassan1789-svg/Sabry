@@ -89,3 +89,46 @@ class ContractorWithholdingReportService(ContractorExtractsReportService):
             params,
         )
         return row["amount"] if row else ZERO
+
+    # -- print: each company on its own pages (user, 2026-10-14) ---------------------------
+
+    def withholding_by_company(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
+                               project_id: Any = None, contractor_id: Any = None,
+                               contract_id: Any = None) -> list[dict[str, Any]]:
+        """The report split by company, in company-code order: ``{"company", "report"}``.
+
+        A company's extracts are its projects' ones. Its رصيد أول المدة is the whole card of
+        every contractor with an approved contract there (+ its extracts before «من»): a
+        contractor working for two companies has his card in both (user, 2026-10-14), so the
+        companies' openings may add up to more than the screen's. A company with neither an
+        extract nor a card balance is left out."""
+        rows = self.report(None, date_to, company_id, project_id, contractor_id, contract_id)
+        by_company: dict[Any, list[dict[str, Any]]] = {}
+        for row in rows:
+            by_company.setdefault(row["company_id"], []).append(row)
+        cards = self.company_cards(company_id, project_id, contractor_id, contract_id)
+        ids = set(by_company) | {key for key, amount in cards.items() if to_decimal(amount) != ZERO}
+        return [{"company": company,
+                 "report": build_report(cards.get(company["company_id"], ZERO),
+                                        by_company.get(company["company_id"], []), date_from)}
+                for company in self.company_print_info(sorted(ids))]
+
+    def company_cards(self, company_id: Any = None, project_id: Any = None, contractor_id: Any = None,
+                      contract_id: Any = None) -> dict[Any, Any]:
+        """«ضرائب الخصم والإضافة» on the approved cards, by company: each contractor's card
+        counts in every company where he has an approved contract the filters cover."""
+        where, params = ["k.status = 'approved'"], []
+        for clause, value in (("p.company_id = %s", company_id), ("k.project_id = %s", project_id),
+                              ("k.contractor_id = %s", contractor_id), ("k.contract_id = %s", contract_id)):
+            if value not in (None, ""):
+                where.append(clause)
+                params.append(value)
+        rows = self._db.fetch_all(
+            "SELECT w.company_id, COALESCE(sum(d.withholding_tax_amount), 0) AS amount "
+            "FROM (SELECT DISTINCT p.company_id, k.contractor_id FROM contractor_contracts k "
+            "JOIN company_projects p ON p.project_id = k.project_id WHERE " + " AND ".join(where) + ") w "
+            "JOIN contractors d ON d.contractor_id = w.contractor_id AND d.status = 'approved' "
+            "GROUP BY w.company_id",
+            params,
+        )
+        return {row["company_id"]: row["amount"] for row in rows}

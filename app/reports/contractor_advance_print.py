@@ -36,6 +36,7 @@ from app.reports.contracting_print import (
     INK,
     MONEY,
     MUTED,
+    FLOW_PAGINATE,
     PAGE_HEIGHT_PX,
     PCT,
     RED,
@@ -241,70 +242,7 @@ tr.pay td {{ background:{PAYMENT_BG}; color:#1E3A8A; }}
 # contract's block moves whole to the next page when it does not fit; a block longer than a
 # page, and the summary table (``.split``), are split between their rows, carrying their band
 # and table head along. Then «س من ص» on every page.
-_PAGINATE = """
-(function () {
-  var LIMIT = %(limit)d;
-  var pages = [];
-  function slice(list) { return Array.prototype.slice.call(list); }
-  slice(document.querySelectorAll('.section')).forEach(function (section) {
-    var parts = slice(section.children);
-    var fixed = parts.filter(function (el) { return el.classList.contains('fixed'); });
-    var flow = parts.filter(function (el) { return !el.classList.contains('fixed'); });
-    var page, count;
-    function newPage() {
-      page = document.createElement('div');
-      page.className = 'page';
-      fixed.forEach(function (el) { page.appendChild(el.cloneNode(true)); });
-      section.parentNode.insertBefore(page, section);
-      pages.push(page);
-      count = 0;  // flowing parts on the page
-    }
-    function over() { return page.offsetHeight > LIMIT; }
-    function split(el) {
-      var rows = slice(el.querySelectorAll('tbody tr'));
-      var shell = el.cloneNode(true);
-      shell.querySelector('tbody').innerHTML = '';
-      var part = shell.cloneNode(true), body = part.querySelector('tbody');
-      page.appendChild(part);
-      count += 1;
-      rows.forEach(function (row) {
-        body.appendChild(row);
-        if (!over() || (body.children.length === 1 && count === 1)) { return; }
-        body.removeChild(row);
-        var started = body.children.length > 0;
-        if (!started) { page.removeChild(part); }
-        newPage();
-        part = shell.cloneNode(true);
-        var title = part.querySelector('.cap-text');
-        if (started && title) { title.textContent += ' (تابع)'; }
-        body = part.querySelector('tbody');
-        page.appendChild(part);
-        count = 1;
-        body.appendChild(row);
-      });
-    }
-    newPage();
-    flow.forEach(function (el) {
-      if (el.classList.contains('split')) { split(el); return; }
-      page.appendChild(el);
-      if (!over()) { count += 1; return; }
-      page.removeChild(el);
-      if (count > 0) {
-        newPage();
-        page.appendChild(el);
-        if (!over()) { count += 1; return; }
-        page.removeChild(el);
-      }
-      split(el);
-    });
-    section.parentNode.removeChild(section);
-  });
-  pages.forEach(function (page, index) {
-    var cell = page.querySelector('.page-no');
-    if (cell) { cell.textContent = (index + 1) + ' من ' + pages.length; }
-  });
-})();
-"""
+_PAGINATE = FLOW_PAGINATE
 
 
 def _legend_html() -> str:
