@@ -22,6 +22,11 @@ The user's rules:
   right-to-left, real numbers.
 * A saved PDF or Excel file opens straight away (user, 2026-10-14).
 
+A report that groups its rows (تقرير المستخلصات, نموذج 1 of its own ten, user
+2026-10-14) hands over ``PrintSection.lines``: group titles, the rows, each group's
+totals and — when «إظهار تفاصيل الخصومات» is on — a red line per deduction. Its
+``PrintDocument.cards`` add a boxed strip of totals on each company's first page.
+
 One HTML document is previewed, printed and saved as PDF through Chromium
 (``QWebEngineView``), as in :mod:`app.ui.screens.tawrid_statement_print`.
 Nothing here reads the database: the screen hands over a :class:`PrintDocument`.
@@ -60,6 +65,22 @@ class PrintColumn:
     label: str
     kind: str = TEXT
     width: int | None = None  # px on paper; ``None`` shares the rest of the width
+    nowrap: bool = False      # a code such as «A-H/CT-1005/EX-01» stays on one line
+
+
+# kinds of table line (a report that groups its rows hands over ``PrintSection.lines``)
+ROW, GROUP, SUBTOTAL, DEDUCTION = "row", "group", "subtotal", "deduction"
+
+
+@dataclass(frozen=True)
+class PrintLine:
+    """One table line: a report row, a group title, a group's totals, or a deduction under its row."""
+
+    kind: str
+    row: dict[str, Any] | None = None     # ROW
+    label: str = ""                       # GROUP / SUBTOTAL / DEDUCTION text
+    totals: dict[str, Any] | None = None  # SUBTOTAL
+    amount: Any = None                    # DEDUCTION
 
 
 @dataclass
@@ -69,6 +90,10 @@ class PrintSection:
     company: dict[str, Any]          # company_name, address, tax_registration_no, logo, logo_mime
     rows: list[dict[str, Any]]
     totals: dict[str, Any]           # by column key (money columns only)
+    lines: list[PrintLine] | None = None  # grouped lines; ``None`` prints ``rows`` one by one
+
+    def table_lines(self) -> list[PrintLine]:
+        return self.lines if self.lines is not None else [PrintLine(ROW, row) for row in self.rows]
 
 
 @dataclass
@@ -82,6 +107,9 @@ class PrintDocument:
     grand_totals: dict[str, Any] | None = None   # set when there is more than one company
     printed_by: str = ""
     printed_at: datetime.datetime = field(default_factory=datetime.datetime.now)
+    cards: tuple[tuple[str, str], ...] = ()      # (totals key, caption): a boxed strip above the table
+    # where a deduction line's amount goes: the first of these columns that prints
+    deduction_keys: tuple[str, ...] = ("other_deductions", "net")
 
     @property
     def file_stem(self) -> str:
@@ -131,6 +159,23 @@ def total_cells(columns: list[PrintColumn], totals: dict[str, Any]) -> list[tupl
         else:
             cells.append(("", False))
     return cells
+
+
+def deduction_cells(document: PrintDocument, line: PrintLine) -> tuple[str, list[str]]:
+    """A deduction line: (its text, the cells after it). The amount sits under «خصومات أخرى»
+    when it prints, else in parentheses under the net, else after the text."""
+    columns = document.columns
+    amount = cell_text(PrintColumn("", "", MONEY), line.amount)
+    keys = [column.key for column in columns]
+    target = next((key for key in document.deduction_keys if key in keys), None)
+    shown = amount if target == document.deduction_keys[0] else f"({amount})"
+    cells = [shown if column.key == target else "" for column in columns[label_span(columns):]]
+    return (line.label if target else f"{line.label}  ({amount})"), cells
+
+
+def font_px(columns: list[PrintColumn]) -> float:
+    """Smaller type when many columns print, so the table still fits the paper's width."""
+    return 11.5 if len(columns) <= 14 else 10.5 if len(columns) <= 17 else 9.5
 
 
 def logo_uri(company: dict[str, Any]) -> str:
@@ -185,14 +230,24 @@ body {{ font-family:{FONTS}; color:{INK}; background:#E9E9EA;
 .filters div {{ flex:1; padding:6px 12px; border-left:1px solid {RULE}; overflow-wrap:anywhere; }}
 .filters div:last-child {{ border-left:none; }}
 .filters span {{ color:{MUTED}; }}
-table {{ width:100%; border-collapse:collapse; font-size:11.5px; }}
+.cards {{ display:grid; gap:6px; }}
+.cards div {{ border:1px solid {CELL_RULE}; border-radius:4px; padding:5px 8px; font-size:11px; color:{MUTED}; }}
+.cards b {{ display:block; font-size:13.5px; color:{INK}; direction:ltr; text-align:right; }}
+.cards div.dark {{ background:{SLATE}; border-color:{SLATE}; color:#E2E8F0; }}
+.cards div.dark b {{ color:#FFFFFF; }}
+table {{ width:100%; border-collapse:collapse; }}
 th {{ background:{SLATE}; color:#FFFFFF; border:1px solid {SLATE}; padding:6px 3px; font-weight:700; }}
 td {{ border:1px solid {CELL_RULE}; padding:6px 3px; text-align:center; overflow-wrap:break-word; }}
 td.num {{ white-space:nowrap; direction:ltr; }}  /* a figure never breaks; its minus stays in front */
+td.nw {{ white-space:nowrap; }}
 td.neg {{ color:{RED}; }}
 tr.total td {{ background:{TOTAL_BG}; border-color:{TOTAL_RULE}; font-weight:700; }}
 tr.grand td {{ background:{SLATE}; color:#FFFFFF; border-color:{TOTAL_RULE}; font-weight:700; }}
 tr.grand td.neg {{ color:#FECACA; }}
+tr.group td {{ background:{TOTAL_BG}; border-color:{TOTAL_RULE}; font-weight:700; text-align:right; padding-right:12px; }}
+tr.sub td {{ background:{TINT}; border-color:{TOTAL_RULE}; font-weight:700; }}
+tr.ded td {{ background:#FEF2F2; color:#991B1B; border-color:#D9A3A3; padding-top:3px; padding-bottom:3px; }}
+tr.ded td.l {{ text-align:right; padding-right:24px; }}
 td.empty {{ color:{MUTED}; padding:14px 3px; }}
 """
 
@@ -209,8 +264,11 @@ _PAGINATE = """
     blank.querySelector('tbody').innerHTML = '';
     var page, body;
     function newPage() {
+      var first = !page;
       page = blank.cloneNode(true);
       page.className = 'page';
+      var cards = page.querySelector('.cards');
+      if (cards && !first) { cards.parentNode.removeChild(cards); }  // the totals: first page only
       body = page.querySelector('tbody');
       section.parentNode.insertBefore(page, section);
       pages.push(page);
@@ -220,7 +278,11 @@ _PAGINATE = """
       body.appendChild(row);
       if (page.offsetHeight > LIMIT && body.children.length > 1) {
         body.removeChild(row);
+        var last = body.lastElementChild;  // a group title never ends a page: it moves with its rows
+        var title = last && last.className === 'group' && body.children.length > 1 ? last : null;
+        if (title) { body.removeChild(title); }
         newPage();
+        if (title) { body.appendChild(title); }
         body.appendChild(row);
       }
     });
@@ -236,7 +298,7 @@ _PAGINATE = """
 
 def _cell_class(column: PrintColumn, value: Any) -> str:
     if column.kind not in (MONEY, PCT):
-        return ""
+        return ' class="nw"' if column.nowrap else ""
     return ' class="num neg"' if _negative(column, value) else ' class="num"'
 
 
@@ -278,16 +340,45 @@ def _total_row(document: PrintDocument, label: str, totals: dict[str, Any], css:
     return f'<tr class="{css}"><td colspan="{span}">{_esc(label)}</td>{cells}</tr>'
 
 
+def _cards_html(document: PrintDocument, section: PrintSection) -> str:
+    if not document.cards:
+        return ""
+    money = PrintColumn("", "", MONEY)
+    cells = "".join(
+        f'<div{" class=dark" if index == len(document.cards) - 1 else ""}>{_esc(caption)}'
+        f"<b>{_esc(cell_text(money, section.totals.get(key)))}</b></div>"
+        for index, (key, caption) in enumerate(document.cards)
+    )
+    return f'<div class="cards" style="grid-template-columns:repeat({len(document.cards)}, minmax(0, 1fr))">{cells}</div>'
+
+
+def _lines_html(document: PrintDocument, section: PrintSection) -> list[str]:
+    columns = document.columns
+    span = label_span(columns)
+    body, serial = [], 0
+    for line in section.table_lines():
+        if line.kind == ROW:
+            serial += 1
+            cells = []
+            for column in columns:
+                value = serial if column is SERIAL else line.row.get(column.key)
+                cells.append(f"<td{_cell_class(column, value)}>{_esc(cell_text(column, value))}</td>")
+            body.append("<tr>" + "".join(cells) + "</tr>")
+        elif line.kind == GROUP:
+            body.append(f'<tr class="group"><td colspan="{len(columns)}">{_esc(line.label)}</td></tr>')
+        elif line.kind == SUBTOTAL:
+            body.append(_total_row(document, line.label, line.totals or {}, "sub"))
+        elif line.kind == DEDUCTION:
+            text, cells = deduction_cells(document, line)
+            body.append(f'<tr class="ded"><td class="l" colspan="{span}">{_esc(text)}</td>'
+                        + "".join(f'<td class="num">{_esc(cell)}</td>' for cell in cells) + "</tr>")
+    return body
+
+
 def _section_html(document: PrintDocument, section: PrintSection, last: bool) -> str:
     columns = document.columns
     head = "".join(f"<th>{_esc(column.label)}</th>" for column in columns)
-    body = []
-    for index, row in enumerate(section.rows, start=1):
-        cells = []
-        for column in columns:
-            value = index if column is SERIAL else row.get(column.key)
-            cells.append(f"<td{_cell_class(column, value)}>{_esc(cell_text(column, value))}</td>")
-        body.append("<tr>" + "".join(cells) + "</tr>")
+    body = _lines_html(document, section)
     if section.rows:
         body.append(_total_row(document, f"الإجمالي — {len(section.rows)} {document.count_noun}",
                                section.totals, "total"))
@@ -297,8 +388,9 @@ def _section_html(document: PrintDocument, section: PrintSection, last: bool) ->
         body.append(_total_row(document, "الإجمالي العام — كل الشركات", document.grand_totals, "grand"))
     return (
         '<div class="section">'
-        f"{_header_html(document, section)}{_filters_html(document)}"
-        f"<table>{_colgroup(columns)}<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
+        f"{_header_html(document, section)}{_filters_html(document)}{_cards_html(document, section)}"
+        f'<table style="font-size:{font_px(columns)}px">{_colgroup(columns)}'
+        f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table>"
         "</div>"
     )
 
@@ -369,20 +461,67 @@ def export_excel(document: PrintDocument, path: str | Path) -> Path:
                 sheet.merge_cells(start_row=row_no, start_column=first_col, end_row=row_no, end_column=width)
             row_no += 1
         row_no += 1
+        if document.cards:  # the totals: captions over figures, one boxed cell each, wrapping at the table width
+            for start in range(0, len(document.cards), width):
+                for col, (key, caption) in enumerate(document.cards[start:start + width], start=1):
+                    dark = start + col == len(document.cards)
+                    top = sheet.cell(row=row_no, column=col, value=caption)
+                    figure = sheet.cell(row=row_no + 1, column=col)
+                    _excel_value(figure, PrintColumn("", "", MONEY), section.totals.get(key))
+                    for cell in (top, figure):
+                        cell.alignment, cell.border = center, grid
+                        if dark:
+                            cell.fill = grand_fill
+                    top.font = Font(size=10, color="FFFFFF" if dark else SLATE[1:])
+                    figure.font = Font(bold=True, color="FFFFFF" if dark else INK[1:])
+                row_no += 2
+            row_no += 1
 
         for col, column in enumerate(columns, start=1):
             cell = sheet.cell(row=row_no, column=col, value=column.label)
             cell.font, cell.fill, cell.alignment, cell.border = Font(bold=True, color="FFFFFF"), head_fill, center, grid
         sheet.row_dimensions[row_no].height = 32
         row_no += 1
-        for serial, row in enumerate(section.rows, start=1):
-            for col, column in enumerate(columns, start=1):
-                value = serial if column is SERIAL else row.get(column.key)
-                cell = sheet.cell(row=row_no, column=col)
-                _excel_value(cell, column, value)
-                cell.alignment, cell.border = center, grid
-                if _negative(column, value):
-                    cell.font = Font(color=RED[1:])
+        span = label_span(columns)
+        serial = 0
+        for line in section.table_lines():
+            if line.kind == ROW:
+                serial += 1
+                for col, column in enumerate(columns, start=1):
+                    value = serial if column is SERIAL else line.row.get(column.key)
+                    cell = sheet.cell(row=row_no, column=col)
+                    _excel_value(cell, column, value)
+                    cell.alignment, cell.border = center, grid
+                    if _negative(column, value):
+                        cell.font = Font(color=RED[1:])
+            elif line.kind == GROUP:
+                cell = sheet.cell(row=row_no, column=1, value=line.label)
+                for col in range(1, width + 1):
+                    target = sheet.cell(row=row_no, column=col)
+                    target.fill, target.border, target.font = total_fill, total_grid, Font(bold=True)
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+                if width > 1:
+                    sheet.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=width)
+            elif line.kind == SUBTOTAL:
+                row_no = _excel_total(sheet, row_no, document, line.label, line.totals or {},
+                                      PatternFill("solid", fgColor=TINT[1:]), Font(bold=True), total_grid, center)
+                continue
+            elif line.kind == DEDUCTION:
+                text, cells = deduction_cells(document, line)
+                red = Font(color="991B1B")
+                sheet.cell(row=row_no, column=1, value=text)
+                for col in range(1, width + 1):
+                    target = sheet.cell(row=row_no, column=col)
+                    shown = cells[col - span - 1] if col > span else ""
+                    if shown.startswith("("):
+                        target.value = shown
+                    elif shown:
+                        _excel_value(target, PrintColumn("", "", MONEY), line.amount)
+                    target.fill = PatternFill("solid", fgColor="FEF2F2")
+                    target.font, target.border, target.alignment = red, grid, center
+                sheet.cell(row=row_no, column=1).alignment = Alignment(horizontal="right", vertical="center")
+                if span > 1:
+                    sheet.merge_cells(start_row=row_no, start_column=1, end_row=row_no, end_column=span)
             row_no += 1
         if section.rows:
             row_no = _excel_total(sheet, row_no, document, f"الإجمالي — {len(section.rows)} {document.count_noun}",
@@ -670,8 +809,8 @@ def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_ex
 
 
 __all__ = [
-    "DATE", "MONEY", "PCT", "TEXT", "SERIAL",
-    "PrintColumn", "PrintDocument", "PrintSection",
+    "DATE", "MONEY", "PCT", "TEXT", "SERIAL", "ROW", "GROUP", "SUBTOTAL", "DEDUCTION",
+    "PrintColumn", "PrintDocument", "PrintLine", "PrintSection", "deduction_cells", "font_px",
     "build_html", "cell_text", "export_excel", "export_pdf", "label_span", "open_file", "page_layout",
     "preview_dialog", "print_report", "save_excel", "total_cells",
 ]

@@ -177,3 +177,67 @@ def test_the_pdf_opens_when_printing_finishes(monkeypatch):
     monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True)
     contracting_print._pdf_done(None, "C:/x/report.pdf", True)
     assert opened == ["C:/x/report.pdf"]
+
+
+# -- grouped lines and the totals cards (تقرير المستخلصات, user 2026-10-14) -------------------
+
+
+def _grouped_document():
+    from app.reports.contracting_print import DEDUCTION, GROUP, ROW, SUBTOTAL, PrintLine
+
+    document = _document(two_companies=False)
+    columns = [SERIAL, PrintColumn("extract_no", "رقم المستخلص", nowrap=True),
+               PrintColumn("other_deductions", "خصومات أخرى", MONEY), PrintColumn("net", "صافي المستخلص", MONEY)]
+    row = {"extract_no": "A-H/CT-1001/EX-01", "other_deductions": Decimal("1000"), "net": Decimal("3052.28")}
+    section = document.sections[0]
+    section.rows = [row]
+    section.totals = {"other_deductions": Decimal("1000"), "net": Decimal("3052.28"), "works_value": Decimal("10000")}
+    section.lines = [PrintLine(GROUP, label="أحمد — 1 مستخلص"), PrintLine(ROW, row),
+                     PrintLine(DEDUCTION, label="• جزاءات — تأخير", amount=Decimal("1000")),
+                     PrintLine(SUBTOTAL, label="إجمالي أحمد", totals=section.totals)]
+    document.columns = columns
+    document.cards = (("works_value", "إجمالي المستخلص"), ("net", "صافي المستخلص"))
+    return document
+
+
+def test_group_titles_subtotals_and_deduction_lines():
+    page = build_html(_grouped_document())
+    assert '<tr class="group"><td colspan="4">أحمد — 1 مستخلص</td></tr>' in page
+    assert '<tr class="ded"><td class="l" colspan="2">• جزاءات — تأخير</td><td class="num">1,000.00</td>' in page
+    assert '<tr class="sub"><td colspan="2">إجمالي أحمد</td>' in page
+    assert '<td class="nw">A-H/CT-1001/EX-01</td>' in page
+
+
+def test_a_deduction_goes_under_the_net_when_its_column_is_hidden():
+    from app.reports.contracting_print import DEDUCTION, PrintLine, deduction_cells
+
+    document = _grouped_document()
+    document.columns = [c for c in document.columns if c.key != "other_deductions"]
+    text, cells = deduction_cells(document, PrintLine(DEDUCTION, label="• جزاءات", amount=Decimal("1000")))
+    assert text == "• جزاءات" and cells == ["(1,000.00)"]
+    document.columns = document.columns[:2]
+    text, cells = deduction_cells(document, PrintLine(DEDUCTION, label="• جزاءات", amount=Decimal("1000")))
+    assert text == "• جزاءات  (1,000.00)"
+
+
+def test_the_cards_are_boxed_and_only_on_the_first_page():
+    page = build_html(_grouped_document())
+    assert '<div class="cards"' in page and "<b>10,000.00</b>" in page and '<div class=dark>صافي المستخلص' in page
+    assert "if (cards && !first)" in page
+
+
+def test_a_group_title_never_ends_a_page():
+    assert "last.className === 'group'" in build_html(_grouped_document())
+
+
+def test_excel_has_the_cards_groups_and_deductions(tmp_path):
+    book = load_workbook(export_excel(_grouped_document(), tmp_path / "x.xlsx"))
+    values = [cell for row in book.active.iter_rows(values_only=True) for cell in row if cell is not None]
+    assert "إجمالي المستخلص" in values and 10000 in values
+    assert "أحمد — 1 مستخلص" in values and "إجمالي أحمد" in values and "• جزاءات — تأخير" in values
+
+
+def test_type_shrinks_when_many_columns_print():
+    from app.reports.contracting_print import font_px
+
+    assert font_px([SERIAL] * 14) == 11.5 and font_px([SERIAL] * 17) == 10.5 and font_px([SERIAL] * 19) == 9.5

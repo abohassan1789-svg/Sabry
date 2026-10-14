@@ -159,6 +159,10 @@ class FakeService:
         return [{"contract_id": c["contract_id"], "contract_label": contract_label(c)} for c in EXTRACTS
                 if company_id in (None, c["company_id"]) and contractor_id in (None, c["contractor_id"])]
 
+    def company_print_info(self, company_ids):
+        return [{**c, "address": None, "tax_registration_no": None, "logo": None, "logo_mime": None}
+                for c in self.company_choices() if c["company_id"] in company_ids]
+
     def report(self, **filters):
         self.last_filters = filters
         return [report_row(x) for x in EXTRACTS
@@ -439,3 +443,61 @@ def test_the_deductions_card_lists_the_types(screen):
     tip = screen.deductions_card.toolTip()
     assert tip.splitlines() == ["الخصومات الأخرى حسب النوع:", "غرامة تأخير: 2,000.00", "أخرى: 1,200.00",
                                 "مياه وكهرباء: 500.00"]
+
+
+# -- print / PDF / Excel: نموذج 1 of the print mockups, with clear borders (user, 2026-10-14) ----
+
+
+def _line_kinds(section):
+    return [(line.kind, line.label) for line in section.lines]
+
+
+def test_the_extracts_report_has_the_print_buttons(screen):
+    assert list(screen.print_buttons) == ["preview", "print", "pdf", "excel"]
+
+
+def test_print_follows_the_grouping_one_company_per_section(screen):
+    screen.show_deductions = False
+    document = screen.print_document()
+    assert [s.company["company_name"] for s in document.sections] == ["الأفق للتطوير", "الدلتا العقارية"]
+    first = document.sections[0]
+    assert _line_kinds(first) == [
+        ("group", "الصفا للكهرباء — 1 مستخلص"), ("row", ""), ("subtotal", "إجمالي الصفا للكهرباء"),
+        ("group", "م. أحمد عبد الرحمن — 2 مستخلصات"), ("row", ""), ("row", ""),
+        ("subtotal", "إجمالي م. أحمد عبد الرحمن")]
+    assert document.subtitle == "مجمّع حسب المقاول"
+    assert document.grand_totals is not None and [k for k, _c in document.cards][-1] == "net"
+
+
+def test_a_closed_group_prints_as_one_totals_line(screen):
+    screen.show_deductions = False
+    screen.collapsed = {1}  # م. أحمد عبد الرحمن
+    kinds = _line_kinds(screen.print_document().sections[0])
+    assert ("subtotal", "م. أحمد عبد الرحمن (2 مستخلصات)") in kinds
+    assert ("group", "م. أحمد عبد الرحمن — 2 مستخلصات") not in kinds
+
+
+def test_deduction_lines_print_only_when_the_button_is_on(screen):
+    screen.show_deductions = True
+    lines = screen.print_document().sections[0].lines
+    deductions = [(line.label, line.amount) for line in lines if line.kind == "deduction"]
+    assert deductions[:2] == [("• غرامة تأخير — تأخير 5 أيام", Decimal("2000")), ("• مياه وكهرباء", Decimal("500"))]
+    screen.show_deductions = False
+    assert not [line for line in screen.print_document().sections[0].lines if line.kind == "deduction"]
+
+
+def test_the_grouped_by_and_company_columns_do_not_print(screen):
+    keys = [c.key for c in screen.print_document().columns]
+    assert "company_name" not in keys and "contractor_name" not in keys
+    assert keys[:3] == ["_serial", "extract_date", "project_name"]
+    screen.set_group_mode("project")
+    keys = [c.key for c in screen.print_document().columns]
+    assert "project_name" not in keys and "contractor_name" in keys
+
+
+def test_without_grouping_the_rows_print_one_by_one(screen):
+    screen.set_group_mode("none")
+    screen.show_deductions = False
+    document = screen.print_document()
+    assert [line.kind for line in document.sections[0].lines] == ["row", "row", "row"]
+    assert document.subtitle == "بدون تجميع"

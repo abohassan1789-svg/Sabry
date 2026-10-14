@@ -12,6 +12,12 @@
   each extract per «خصومات أخرى» (النوع — السبب، المبلغ), with إجمالي الخصومات
   beside the button; kept per user. The «الخصومات الأخرى» card's tooltip adds
   the deductions up per type. No figure changes: they are already in الصافي.
+* معاينة / طباعة / PDF / Excel (user, 2026-10-14: نموذج 1 of ten, with clear
+  borders): the shared header, a boxed strip of the eight totals, then the table
+  as the screen shows it — the same grouping, closed groups as one totals line,
+  the deduction lines when the button is on, the chosen columns. Each company
+  prints on its own pages; «اسم الشركة» and the grouped-by column never print as
+  columns (they are in the header and the group titles).
 
 Every figure comes from ``contractor_extracts_report_service``.
 """
@@ -35,6 +41,21 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.reports.contracting_print import (
+    DATE,
+    DEDUCTION,
+    GROUP,
+    MONEY,
+    PCT,
+    ROW,
+    SERIAL,
+    SUBTOTAL,
+    PrintColumn,
+    PrintDocument,
+    PrintLine,
+    PrintSection,
+)
+from app.security.session_context import SESSION
 from app.services.contractor_extract_service import deductions_by_type
 from app.services.contractor_extracts_report_service import (
     GROUP_COMPANY,
@@ -121,6 +142,24 @@ CARDS = (
     ("net", "إجمالي صافي المستخلص"),
 )
 
+# The printed names of the columns and cards (نموذج 1 of the print mockups, 2026-10-14).
+PRINT_LABELS = {
+    "extract_date": "التاريخ", "project_name": "المشروع", "contractor_name": "المقاول", "contract_label": "العقد",
+    "extract_no": "رقم المستخلص", "works_value": "إجمالي المستخلص", "vat_pct": "نسبة الضريبة",
+    "before_tax": "صافي الأعمال", "advance_payment_pct": "نسبة المقدمة", "advance_payment": "الدفعة المقدمة",
+    "withholding_tax_pct": "نسبة ضرائب الخصم", "withholding_tax": "ضرائب الخصم",
+    "works_insurance_pct": "نسبة تأمين الأعمال", "works_insurance": "تأمين الأعمال",
+    "social_insurance_pct": "نسبة التأمينات", "social_insurance": "التأمينات الاجتماعية",
+    "other_deductions": "خصومات أخرى", "net": "صافي المستخلص",
+}
+PRINT_CARDS = (
+    ("works_value", "إجمالي المستخلص"), ("before_tax", "صافي الأعمال"), ("advance_payment", "الدفعة المقدمة"),
+    ("withholding_tax", "ضرائب الخصم"), ("works_insurance", "تأمين الأعمال"),
+    ("social_insurance", "التأمينات الاجتماعية"), ("other_deductions", "الخصومات الأخرى"), ("net", "صافي المستخلص"),
+)
+# The grouped-by column is the group's title, so it does not print.
+GROUP_COLUMN = {GROUP_CONTRACTOR: "contractor_name", GROUP_PROJECT: "project_name"}
+
 GROUP_MODES = (
     (GROUP_NONE, "بدون تجميع"),
     (GROUP_CONTRACTOR, "حسب المقاول"),
@@ -159,6 +198,7 @@ class ContractorExtractsReportScreen(ContractingReportBase):
     ICON = "🧾"
     PERMISSION_BASE = PERMISSION_BASE
     CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
+    PRINTABLE = True  # معاينة / طباعة / PDF / Excel (user, 2026-10-14)
 
     def __init__(self, service: ContractorExtractsReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -385,6 +425,75 @@ class ContractorExtractsReportScreen(ContractingReportBase):
         label = "الإجمالي العام" if grouped else "الإجمالي"
         self._add_totals(ROW_TOTAL, None, f"{label} — {_count_text(self.totals['count'])}", self.totals, TOTAL_BG)
         self.fitter.fit()
+
+    # -- print / export ----------------------------------------------------------------
+
+    def print_columns(self) -> list[PrintColumn]:
+        hidden = {"company_name", GROUP_COLUMN.get(self.group_mode)}
+        columns = [SERIAL]
+        for key in COLUMN_KEYS:
+            if key in self.visible_columns and key not in hidden:
+                kind = DATE if key == "extract_date" else PCT if KIND[key] == RATE_COL else (
+                    MONEY if KIND[key] == AMOUNT_COL else "text")
+                columns.append(PrintColumn(key, PRINT_LABELS[key], kind, 74 if kind == DATE else None,
+                                           nowrap=key == "extract_no"))
+        return columns
+
+    def print_lines(self, rows: list[dict[str, Any]]) -> list[PrintLine]:
+        """One company's table, as the screen shows it."""
+        lines: list[PrintLine] = []
+
+        def add_row(row: dict[str, Any]) -> None:
+            lines.append(PrintLine(ROW, row))
+            if self.show_deductions:
+                lines.extend(PrintLine(DEDUCTION, label=deduction_text(d), amount=d.get("amount"))
+                             for d in row.get("deductions") or [])
+
+        if self.group_mode not in GROUP_COLUMN:  # بدون تجميع, or حسب الشركة (a company is its own pages)
+            for row in rows:
+                add_row(row)
+            return lines
+        for group in group_rows(rows, self.group_mode):
+            count = _count_text(len(group["rows"]))
+            if group["key"] in self.collapsed:
+                lines.append(PrintLine(SUBTOTAL, label=f"{group['name']} ({count})", totals=group["totals"]))
+                continue
+            lines.append(PrintLine(GROUP, label=f"{group['name']} — {count}"))
+            for row in group["rows"]:
+                add_row(row)
+            lines.append(PrintLine(SUBTOTAL, label=f"إجمالي {group['name']}", totals=group["totals"]))
+        return lines
+
+    def print_document(self) -> PrintDocument:
+        """The report for the current filters (run again so header and lines agree), one
+        section per company."""
+        self.run_report()
+        by_company: dict[Any, list[dict[str, Any]]] = {}
+        for row in self.rows:
+            by_company.setdefault(row["company_id"], []).append(row)
+        chosen = self.company_combo.currentData()
+        ids = list(by_company) or ([chosen] if chosen not in (None, "") else [])
+        companies = self.service.company_print_info(ids)
+        sections = [PrintSection(company, by_company[company["company_id"]],
+                                 report_totals(by_company[company["company_id"]]),
+                                 self.print_lines(by_company[company["company_id"]]))
+                    for company in companies if company["company_id"] in by_company]
+        if not sections:
+            sections = [PrintSection(companies[0] if companies else {"company_name": "كل الشركات"}, [],
+                                     report_totals([]))]
+        mode_text = dict(GROUP_MODES)[self.group_mode]
+        user = (SESSION.user or {}).get("username") if SESSION.user else None
+        return PrintDocument(
+            title=self.TITLE,
+            subtitle="بدون تجميع" if self.group_mode == GROUP_NONE else f"مجمّع {mode_text}",
+            count_noun="مستخلصات",
+            filters=self.filter_texts(),
+            columns=self.print_columns(),
+            sections=sections,
+            grand_totals=self.totals if len(sections) > 1 else None,
+            printed_by=user or "",
+            cards=PRINT_CARDS,
+        )
 
     def _new_row(self, kind: str, key: Any, height: int) -> int:
         index = self.table.rowCount()
