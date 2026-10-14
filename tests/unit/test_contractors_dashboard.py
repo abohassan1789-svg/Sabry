@@ -135,6 +135,59 @@ def test_empty_dashboard():
     assert d["payments"]["remaining"] == 0
 
 
+# -- every filter narrows every section (user, 2026-10-14) -------------------------------------
+
+
+class RecordingDb:
+    """Answers nothing; keeps every query so the WHERE clauses can be checked."""
+
+    def __init__(self):
+        self.queries = []
+
+    def fetch_all(self, sql, params=()):
+        assert sql.count("%s") == len(params), sql
+        self.queries.append((sql, list(params)))
+        return []
+
+
+def _run(**filters):
+    from app.services.contractors_dashboard_service import ContractorsDashboardService
+
+    db = RecordingDb()
+    service = ContractorsDashboardService.__new__(ContractorsDashboardService)
+    service._db = db
+    service.dashboard(**filters)
+    # the contractors query, then the projects one
+    return {"FROM contractors d": db.queries[0],
+            "FROM company_projects p": next(q for q in db.queries if q[0].startswith("SELECT p.project_id"))}
+
+
+def test_no_filter_counts_everyone():
+    queries = _run()
+    assert "UNION ALL" not in queries["FROM contractors d"][0]
+    assert "UNION ALL" not in queries["FROM company_projects p"][0]
+
+
+def test_a_period_keeps_the_contractors_and_projects_with_activity():
+    start, end = datetime.date(2026, 1, 1), datetime.date(2026, 3, 31)
+    queries = _run(date_from=start, date_to=end)
+    for name in ("FROM contractors d", "FROM company_projects p"):
+        sql, params = queries[name]
+        for column in ("k.contract_date", "x.extract_date", "y.payment_date"):
+            assert f"{column} >= %s" in sql and f"{column} <= %s" in sql
+        assert params.count(start) == 3 and params.count(end) == 3
+
+
+def test_a_contractor_keeps_only_his_companies_and_projects():
+    sql, params = _run(contractor_id=7)["FROM company_projects p"]
+    assert "a.contractor_id = %s" in sql and params == [7]
+
+
+def test_a_company_keeps_the_contractors_with_activity_there():
+    sql, params = _run(company_id=10)["FROM contractors d"]
+    assert "UNION ALL" in sql and "p.company_id = %s" in sql and params == [10]
+
+
 # -- the screen -----------------------------------------------------------------------------
 
 

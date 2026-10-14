@@ -15,10 +15,15 @@ One figure set per screen of «المقاولات», as the user listed them:
 Added in the mockups and kept: «المتبقي للمقاولين» = صافي المستخلصات − الدفعات,
 and the payments per طريقة الدفع.
 
-The filters: the period narrows each record by its own date (تاريخ العقد، تاريخ
-المستخلص، تاريخ الدفعة). Contractors have no date, so their figures ignore it. The
-company / project / contractor filters narrow everything; a company or project
-filter keeps only the contractors with a contract there.
+The filters narrow every figure (user, 2026-10-14: «أي فلتر … كل النتائج تتأثر بيه»):
+
+* العقود / المستخلصات / الدفعات: each record by its own date (تاريخ العقد، تاريخ
+  المستخلص، تاريخ الدفعة) and by the company / project / contractor.
+* المقاولين: contractors have no date, so a period, company or project keeps only
+  the contractors with *activity* there — an approved contract, extract or payment
+  dated in the period, in that company / project.
+* الشركات والمشاريع: a contractor or a period keeps only the projects with activity
+  (of that contractor, in that period), and the companies of those projects.
 
 Approved records only (مسودة / معتمد, 2026-10-02): no draft contractor,
 company, project, contract, extract or payment counts anywhere.
@@ -181,31 +186,62 @@ class ContractorsDashboardService(ContractorContractsReportService):
                     params.append(value)
             return ("WHERE " + " AND ".join(clauses) + " " if clauses else ""), params
 
-        sql, params = where(None, "p.company_id", "k.project_id", None, ("k",))
-        scoped = company_id not in (None, "") or project_id not in (None, "")
+        def given(value: Any) -> bool:
+            return value not in (None, "")
+
+        dated = given(date_from) or given(date_to)
+
+        def activity() -> tuple[str, list[Any]]:
+            """(contractor_id, project_id) of every approved contract, extract and payment in
+            the period (a payment may have no project)."""
+            parts, params = [], []
+            for select, date_column in (
+                ("SELECT k.contractor_id, k.project_id FROM contractor_contracts k "
+                 "WHERE k.status = 'approved'", "k.contract_date"),
+                ("SELECT k.contractor_id, k.project_id FROM contractor_extracts x "
+                 "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
+                 "WHERE x.status = 'approved' AND k.status = 'approved'", "x.extract_date"),
+                ("SELECT y.contractor_id, y.project_id FROM contractor_payments y "
+                 "WHERE y.status = 'approved'", "y.payment_date"),
+            ):
+                for clause, value in ((f" AND {date_column} >= %s", date_from), (f" AND {date_column} <= %s", date_to)):
+                    if given(value):
+                        select += clause
+                        params.append(value)
+                parts.append(select)
+            return "(" + " UNION ALL ".join(parts) + ") a ", params
+
         contractor_sql = ("SELECT d.contractor_id, d.contractor_name, d.contractor_type, d.current_balance, "
                           "d.withholding_tax_amount, d.social_insurance_amount, d.works_insurance_amount, "
                           "d.other_deductions_amount FROM contractors d ")
         clauses, contractor_params = ["d.status = 'approved'"], []
-        if contractor_id not in (None, ""):
+        if given(contractor_id):
             clauses.append("d.contractor_id = %s")
             contractor_params.append(contractor_id)
-        if scoped:
-            clauses.append("d.contractor_id IN (SELECT k.contractor_id FROM contractor_contracts k "
-                           "JOIN company_projects p ON p.project_id = k.project_id " + sql + ")")
-            contractor_params += params
+        if dated or given(company_id) or given(project_id):
+            active, active_params = activity()
+            sql, params = where(None, "p.company_id", "a.project_id", None)
+            clauses.append("d.contractor_id IN (SELECT a.contractor_id FROM " + active
+                           + "LEFT JOIN company_projects p ON p.project_id = a.project_id " + sql + ")")
+            contractor_params += active_params + params
         contractors = self._db.fetch_all(
             contractor_sql + "WHERE " + " AND ".join(clauses) + " ORDER BY d.contractor_code",
             contractor_params,
         )
 
         company_where, company_params = where(None, "c.company_id", "p.project_id", None, ("p", "c"))
+        narrowed = dated or given(contractor_id)
+        if narrowed:  # only the projects this contractor / period touched
+            active, active_params = activity()
+            company_where += "AND p.project_id IN (SELECT a.project_id FROM " + active + (
+                "WHERE a.contractor_id = %s)" if given(contractor_id) else ")")
+            company_params += active_params + ([contractor_id] if given(contractor_id) else [])
         projects = self._db.fetch_all(
             "SELECT p.project_id, p.company_id FROM company_projects p "
             "JOIN client_companies c ON c.company_id = p.company_id " + company_where,
             company_params,
         )
-        if project_id not in (None, ""):
+        if narrowed or given(project_id):
             company_ids = {p["company_id"] for p in projects}
             companies = [c for c in self.company_choices() if c["company_id"] in company_ids]
         elif company_id not in (None, ""):
