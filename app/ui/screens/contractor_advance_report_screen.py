@@ -12,6 +12,10 @@ Both tabs show the same lines and totals; «العقد» (رقم — اسم, 202
 the columns and names the contract in the popup and the inline title. «تحديد أعمدة الجدول» sits above the
 tabs and applies to both; the choice is kept per user. Every figure comes from
 ``contractor_advance_report_service``.
+
+معاينة / طباعة / PDF / Excel (phase 3, user 2026-10-14) print نموذج 3 «كشف لكل عقد
+بشريط السداد» (:mod:`app.reports.contractor_advance_print`): a block per contract like
+its window, each company on its own pages, then a summary table of its contracts.
 """
 
 from __future__ import annotations
@@ -35,6 +39,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.reports.contracting_print import DATE, MONEY, PCT, SERIAL, PrintColumn
+from app.reports.contractor_advance_print import AdvanceDocument, AdvanceSection, ContractBlock
+from app.security.session_context import SESSION
 from app.services.contractor_advance_report_service import (
     PAYMENT_LABEL,
     PAYMENT_LINE,
@@ -93,6 +100,21 @@ CARDS = (
     ("remaining_advance", "إجمالي المتبقي"),
 )
 COLUMN_GROUPS = (("بيانات العقد", COLUMN_KEYS[:5]), ("الدفعة المقدمة", COLUMN_KEYS[5:]))
+
+# The summary table at the end of the print: the screen's columns, «اسم الشركة» aside (it is
+# the header); only the visible ones print.
+PRINT_COLUMNS = (
+    PrintColumn("contract_label", "العقد", width=118),
+    PrintColumn("contract_date", "تاريخ العقد", DATE, 78),
+    PrintColumn("project_name", "اسم المشروع"),
+    PrintColumn("contractor_name", "اسم المقاول"),
+    PrintColumn("contract_value", "قيمة العقد", MONEY),
+    PrintColumn("advance_payment_pct", "نسبة الدفعة المقدمة", PCT, 64),
+    PrintColumn("advance_agreed", "قيمة الدفعة المقدمة من العقد", MONEY),
+    PrintColumn("advance_deducted", "إجمالي المسدد من الدفعة المقدمة", MONEY),
+    PrintColumn("advance_paid_out", "المصروف من الدفعات المقدمة", MONEY),
+    PrintColumn("remaining_advance", "المتبقي", MONEY),
+)
 
 # The popup's columns: the user's list, with رقم المستخلص after التاريخ (user asked 2026-09-26).
 LINE_COLUMNS: tuple[tuple[str, str, str], ...] = (
@@ -409,6 +431,7 @@ class ContractorAdvanceReportScreen(ContractingReportBase):
     ICON = "💳"
     PERMISSION_BASE = PERMISSION_BASE
     CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
+    PRINTABLE = True  # معاينة / طباعة / PDF / Excel — نموذج 3 (user, 2026-10-14)
 
     def __init__(self, service: ContractorAdvanceReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -646,3 +669,37 @@ class ContractorAdvanceReportScreen(ContractingReportBase):
     def toggle_contract(self, contract_id: Any) -> None:
         self.expanded.symmetric_difference_update({contract_id})
         self._fill_inline_table()
+
+    # -- print / export ----------------------------------------------------------------
+
+    def print_document(self) -> AdvanceDocument:
+        """What prints: the report for the current filters (run again, so the header and the
+        blocks agree), one section per company, each contract with its lines."""
+        self.run_report()
+        by_company: dict[Any, list[dict[str, Any]]] = {}
+        for row in self.rows:
+            by_company.setdefault(row["company_id"], []).append(row)
+        chosen = self.company_combo.currentData()
+        ids = list(by_company) or ([chosen] if chosen not in (None, "") else [])
+        companies = self.service.company_print_info(ids)
+        sections = [AdvanceSection(company, [self._print_block(row) for row in by_company[company["company_id"]]],
+                                   report_totals(by_company[company["company_id"]]))
+                    for company in companies if company["company_id"] in by_company]
+        if not sections:
+            sections = [AdvanceSection(companies[0] if companies else {"company_name": "كل الشركات"}, [],
+                                       report_totals([]))]
+        user = (SESSION.user or {}).get("username") if SESSION.user else None
+        return AdvanceDocument(
+            title=self.TITLE,
+            subtitle="الدفعة المقدمة من كل عقد وما سُدد منها",
+            filters=self.filter_texts(),
+            visible=tuple(self.visible_columns),
+            columns=[SERIAL] + [column for column in PRINT_COLUMNS if column.key in self.visible_columns],
+            sections=sections,
+            grand_totals=self.totals if len(sections) > 1 else None,
+            printed_by=user or "",
+        )
+
+    def _print_block(self, contract: dict[str, Any]) -> ContractBlock:
+        lines = self.lines_for(contract)
+        return ContractBlock(contract, lines, [_line_color(lines, index) for index in range(len(lines))])

@@ -308,13 +308,14 @@ def _colgroup(columns: list[PrintColumn]) -> str:
     ) + "</colgroup>"
 
 
-def _header_html(document: PrintDocument, section: PrintSection) -> str:
+def _header_html(document: PrintDocument, section: PrintSection, fixed: bool = False) -> str:
+    """*fixed* marks it for a report whose own page splitter repeats the ``.fixed`` parts."""
     company = section.company
     uri = logo_uri(company)
     logo = f'<img src="{uri}" alt="">' if uri else ""
     lines = "".join(f'<div class="co-line">{_esc(line)}</div>' for line in company_lines(company))
     return (
-        '<div class="head">'
+        f'<div class="head{" fixed" if fixed else ""}">'
         f'<div class="co">{logo}<div><div class="co-name">{_esc(company.get("company_name"))}</div>{lines}</div></div>'
         f'<div class="title"><div class="t">{_esc(document.title)}</div>'
         f'<div class="st">{_esc(document.subtitle)}</div></div>'
@@ -327,8 +328,8 @@ def _header_html(document: PrintDocument, section: PrintSection) -> str:
     )
 
 
-def _filters_html(document: PrintDocument) -> str:
-    return '<div class="filters">' + "".join(
+def _filters_html(document: PrintDocument, fixed: bool = False) -> str:
+    return f'<div class="filters{" fixed" if fixed else ""}">' + "".join(
         f"<div><span>{_esc(caption)}: </span><b>{_esc(value)}</b></div>" for caption, value in document.filters
     ) + "</div>"
 

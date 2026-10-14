@@ -157,6 +157,11 @@ class FakeService:
         self.extract_calls += 1
         return _lines(contract)
 
+    def company_print_info(self, company_ids):
+        return [{"company_id": c["company_id"], "company_name": c["company_name"], "address": None,
+                 "tax_registration_no": None, "logo": None}
+                for c in self.company_choices() if c["company_id"] in company_ids]
+
 
 @pytest.fixture(scope="module")
 def qt_app():
@@ -377,3 +382,49 @@ def test_a_new_column_is_not_forced_on_a_choice_saved_after_it(settings):
     assert load_columns(settings, "fresh", keys, keys, added=("new",)) == keys  # never saved: defaults
     save_columns(settings, "fresh", ("a",))  # the user's first choice already knew «new»
     assert load_columns(settings, "fresh", keys, keys, added=("new",)) == ("a",)
+
+
+# -- print / export: نموذج 3 «كشف لكل عقد بشريط السداد» (user, 2026-10-14) -------------------
+
+
+def test_print_buttons_are_on_the_report(screen):
+    assert screen.PRINTABLE
+    assert set(screen.print_buttons) == {"preview", "print", "pdf", "excel"}
+
+
+def test_print_one_section_per_company_with_a_block_per_contract(screen):
+    document = screen.print_document()
+    assert [section.company["company_name"] for section in document.sections] == ["الأفق للتطوير",
+                                                                                  "الدلتا العقارية"]
+    first = document.sections[0]
+    assert [block.contract["contract_id"] for block in first.blocks] == [1, 3]
+    assert len(first.blocks[0].lines) == 3 and first.blocks[0].colors == list(adv_screen.SEGMENT_COLORS[:3])
+    assert first.totals["advance_agreed"] == Decimal("345000.00")
+    assert document.sections[1].blocks[0].lines == []
+    assert document.grand_totals["advance_agreed"] == screen.totals["advance_agreed"]
+
+
+def test_one_company_prints_without_a_grand_total(screen):
+    screen.company_combo.setCurrentIndex(1)
+    document = screen.print_document()
+    assert len(document.sections) == 1 and document.grand_totals is None
+
+
+def test_print_follows_the_column_chooser(screen):
+    screen.set_visible_columns(("contract_label", "company_name", "contract_value", "remaining_advance"))
+    document = screen.print_document()
+    assert [column.key for column in document.columns] == ["_serial", "contract_label", "contract_value",
+                                                            "remaining_advance"]  # the company is the header
+    assert document.visible == ("contract_label", "company_name", "contract_value", "remaining_advance")
+    page = document.html()
+    assert "م. أحمد عبد الرحمن" not in page and "قيمة العقد<b>" in page
+
+
+def test_print_shows_the_payments_in_blue(qt_app, settings):
+    service = FakeService()
+    service.contract_extracts = lambda contract: by_date(_lines(contract) + _payment_lines())
+    widget = ContractorAdvanceReportScreen(service, settings=settings)
+    block = widget.print_document().sections[0].blocks[0]
+    for line, color in zip(block.lines, block.colors):
+        assert (color in adv_screen.PAYMENT_COLORS) == (line.get("kind") == PAYMENT_LINE)
+    widget.close()
