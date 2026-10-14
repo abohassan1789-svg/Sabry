@@ -20,6 +20,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 from PySide6.QtCore import QPoint
+from PySide6.QtCore import QSettings
 from PySide6.QtWidgets import QApplication
 
 from app.services.contractor_contract_service import contract_label
@@ -197,8 +198,13 @@ def qt_app():
 
 
 @pytest.fixture
-def screen(qt_app):
-    widget = ContractorContractsReportScreen(FakeService())
+def settings(tmp_path):
+    return QSettings(str(tmp_path / "report.ini"), QSettings.IniFormat)
+
+
+@pytest.fixture
+def screen(qt_app, settings):
+    widget = ContractorContractsReportScreen(FakeService(), settings=settings)
     widget.resize(1700, 900)
     yield widget
     widget.close()
@@ -449,3 +455,58 @@ def test_service_contract_choices_and_filter():
     ContractorContractsReportService(db).report(contract_id=7)
     sql, params = db.queries[0]
     assert "k.contract_id = %s" in sql and params == [7]
+
+
+# -- «تحديد أعمدة الجدول» (user, 2026-10-14) ----------------------------------------------------
+
+from app.ui.screens.contractor_contracts_report_screen import COLUMN_KEYS, PROGRESS_COLUMNS  # noqa: E402
+
+
+def _shown(table, keys):
+    return [key for column, key in enumerate(keys) if not table.isColumnHidden(column)]
+
+
+def test_the_chooser_lists_every_column_and_starts_with_all(screen):
+    assert list(screen.chooser.boxes) == list(COLUMN_KEYS) and len(COLUMN_KEYS) == 14
+    assert COLUMN_KEYS[0] == "contract_label" and screen.chooser.boxes["contract_label"].text() == "العقد"
+    assert all(box.isChecked() for box in screen.chooser.boxes.values())
+    assert screen.columns_count.text() == "ظاهر 14 من 14 عمود"
+    assert _shown(screen.progress_table, PROGRESS_COLUMNS) == list(PROGRESS_COLUMNS)
+    assert _shown(screen.band_table, BAND_KEYS) == list(BAND_KEYS)
+
+
+def test_hiding_columns_applies_to_both_tabs_and_moves_the_total_label(screen):
+    screen.chooser.boxes["contract_label"].setChecked(False)
+    screen.chooser.boxes["contract_date"].setChecked(False)
+    screen.chooser.boxes["status"].setChecked(False)
+    for table, keys in ((screen.progress_table, PROGRESS_COLUMNS), (screen.band_table, BAND_KEYS)):
+        shown = _shown(table, keys)
+        assert "contract_label" not in shown and "contract_date" not in shown and "company_name" in shown
+        total = table.rowCount() - 1
+        assert table.item(total, keys.index("company_name")).text() == "الإجمالي — 4 عقود"
+    assert screen.progress_table.isColumnHidden(P_STATUS)
+    assert screen.columns_count.text() == "ظاهر 11 من 14 عمود"
+
+
+def test_a_band_title_hides_with_all_its_columns(screen):
+    screen.tabs.setCurrentIndex(TAB_BANDS)
+    screen.show()
+    QApplication.processEvents()
+    identity = [key for key, _box in screen.chooser.boxes.items()][:5]
+    screen.set_visible_columns([key for key in COLUMN_KEYS if key not in identity])
+    QApplication.processEvents()
+    assert [label.isVisible() for label in screen.band_header.labels] == [False, True, True]
+    assert screen.band_table.item(screen.band_table.rowCount() - 1, 0).text() == ""  # no label to show
+
+
+def test_the_column_choice_is_kept_per_user(qt_app, settings):
+    first = ContractorContractsReportScreen(FakeService(), settings=settings)
+    first.set_visible_columns(["contract_label", "contractor_name", "contract_value", "remaining_value"])
+    first.close()
+    second = ContractorContractsReportScreen(FakeService(), settings=settings)
+    assert second.visible_columns == ("contract_label", "contractor_name", "contract_value", "remaining_value")
+    assert _shown(second.band_table, BAND_KEYS) == ["contract_label", "contractor_name", "contract_value",
+                                                     "remaining_value"]
+    second.chooser.default_button.click()
+    assert second.visible_columns == COLUMN_KEYS
+    second.close()

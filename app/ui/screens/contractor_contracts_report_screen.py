@@ -11,7 +11,8 @@ contracting screens, so they can choose one by using the real report:
   the advance remainder reads as a subtraction.
 
 Both tabs start with «العقد» (رقم — اسم, 2026-10-13) and show the same filtered
-lines and the same totals row. Every figure
+lines and the same totals row. «تحديد أعمدة الجدول» sits above the tabs and applies
+to both (user, 2026-10-14); every column starts shown and the choice is kept per user. Every figure
 comes from ``contractor_contracts_report_service``.
 """
 
@@ -20,7 +21,7 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, QSettings, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -49,13 +50,19 @@ from app.ui.screens.contracting_report_base import (
     RED,
     TABLE_QSS as _TABLE_QSS,
     TOTAL_BG,
+    ColumnChooser,
     ContractingReportBase,
+    column_button,
     date_text as _date_text,
+    load_columns,
+    report_settings,
+    save_columns,
     table_item,
 )
 from app.ui.screens.contractor_contracts_screen import _money, _rate_text
 
 PERMISSION_BASE = "contracting.contractor_contracts_report"
+SETTINGS_KEY = "contractor_contracts_report/columns"
 AMBER = "#B45309"
 TAB_PROGRESS, TAB_BANDS = 0, 1
 
@@ -87,8 +94,21 @@ BAND_KEYS = tuple(key for _title, _colors, columns in BANDS for _header, key in 
 NAME_KEYS = ("contract_label", "company_name", "project_name", "contractor_name")
 # The names share the spare width; «العقد» keeps its own width, so رقم — اسم stays on one line.
 STRETCH_KEYS = NAME_KEYS[1:]
-# The totals row's «الإجمالي» spans the contract's identity columns.
-LABEL_SPAN = len(BANDS[0][2])
+# The contract's identity columns lead both tabs; the totals row's «الإجمالي» spans the visible ones.
+IDENTITY_KEYS = tuple(key for _header, key in BANDS[0][2])
+
+# «تحديد أعمدة الجدول» (user, 2026-10-14): one choice for both tabs, grouped like نموذج 5's bands.
+# Each tab shows the chosen columns it has (قيمة الدفعة المقدمة is نموذج 5's, الحالة نموذج 7's).
+PROGRESS_COLUMNS = PROGRESS_KEYS + ("remaining_value", "remaining_advance", "status")
+HEADER = {key: header.replace("\n", " ") for _title, _colors, columns in BANDS for header, key in columns}
+HEADER["status"] = "الحالة"
+COLUMN_GROUPS = (
+    (BANDS[0][0], IDENTITY_KEYS),
+    (BANDS[1][0], tuple(key for _header, key in BANDS[1][2]) + ("status",)),
+    (BANDS[2][0], tuple(key for _header, key in BANDS[2][2])),
+)
+COLUMN_KEYS = tuple(key for _title, keys in COLUMN_GROUPS for key in keys)
+DEFAULT_COLUMNS = COLUMN_KEYS  # every column shows until the user picks (2026-10-14)
 
 # «الحالة»: (text colour, background).
 STATUS_COLORS = {
@@ -187,16 +207,21 @@ class BandHeader(QWidget):
         viewport = header.viewport()
         spans, start = [], 0
         for _title, _colors, columns in BANDS:
-            sections = range(start, start + len(columns))
+            # Only the columns «تحديد أعمدة الجدول» left visible; a band with none has no width.
+            sections = [i for i in range(start, start + len(columns)) if not header.isSectionHidden(i)]
+            start += len(columns)
+            if not sections:
+                spans.append((0, 0))
+                continue
             left = min(header.sectionViewportPosition(i) for i in sections)
             right = max(header.sectionViewportPosition(i) + header.sectionSize(i) for i in sections)
             x = self.mapFromGlobal(viewport.mapToGlobal(QPoint(left, 0))).x()
             spans.append((x, right - left))
-            start += len(columns)
         return spans
 
     def sync(self) -> None:
         for label, (x, width) in zip(self.labels, self.band_spans()):
+            label.setVisible(width > 0)
             label.setGeometry(x, 0, width, self.height())
 
     def resizeEvent(self, event) -> None:  # noqa: N802 (Qt override)
@@ -211,14 +236,25 @@ class ContractorContractsReportScreen(ContractingReportBase):
     CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13)
 
     def __init__(self, service: ContractorContractsReportService | None = None,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, settings: QSettings | None = None) -> None:
+        self.settings = settings or report_settings()
         self.rows: list[dict[str, Any]] = []
         self.totals: dict[str, Any] = report_totals([])
+        self.visible_columns = load_columns(self.settings, SETTINGS_KEY, COLUMN_KEYS, DEFAULT_COLUMNS)
         super().__init__(service or ContractorContractsReportService(), parent)
 
     # -- layout ------------------------------------------------------------------
 
     def _build_body(self, root: QVBoxLayout) -> None:
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        self.chooser = ColumnChooser(COLUMN_GROUPS, HEADER, DEFAULT_COLUMNS, self.set_visible_columns)
+        self.columns_button, self.columns_menu = column_button(self.chooser)
+        self.columns_count = self._caption("")
+        toolbar.addWidget(self.columns_button)
+        toolbar.addWidget(self.columns_count)
+        toolbar.addStretch(1)
+        root.addLayout(toolbar)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tabs.setStyleSheet(
@@ -231,6 +267,32 @@ class ContractorContractsReportScreen(ContractingReportBase):
         self.tabs.addTab(self._build_progress_tab(), "📊  مؤشرات التقدّم (نموذج 7)")
         self.tabs.addTab(self._build_bands_tab(), "📋  أعمدة مجمّعة (نموذج 5)")
         root.addWidget(self.tabs, 1)
+        self._apply_columns()
+
+    # -- columns -------------------------------------------------------------------
+
+    def set_visible_columns(self, keys: tuple[str, ...] | list[str]) -> None:
+        chosen = set(keys)
+        self.visible_columns = tuple(key for key in COLUMN_KEYS if key in chosen)
+        save_columns(self.settings, SETTINGS_KEY, self.visible_columns)
+        self._apply_columns()
+        self._fill_progress()  # the totals label sits on the visible columns
+        self._fill_bands()
+
+    def _apply_columns(self) -> None:
+        for table, keys in ((self.progress_table, PROGRESS_COLUMNS), (self.band_table, BAND_KEYS)):
+            for column, key in enumerate(keys):
+                table.setColumnHidden(column, key not in self.visible_columns)
+        self.columns_count.setText(f"ظاهر {len(self.visible_columns)} من {len(COLUMN_KEYS)} عمود")
+        self.chooser.sync(self.visible_columns)
+        self.band_header.sync()
+
+    def _label_span(self) -> tuple[int, int]:
+        """(first column, span) of «الإجمالي»: from the first visible identity column to their end."""
+        visible = [i for i, key in enumerate(IDENTITY_KEYS) if key in self.visible_columns]
+        if not visible:
+            return -1, 0
+        return visible[0], len(IDENTITY_KEYS) - visible[0]
 
     def _new_table(self, headers: tuple[str, ...]) -> QTableWidget:
         table = QTableWidget(0, len(headers))
@@ -295,9 +357,12 @@ class ContractorContractsReportScreen(ContractingReportBase):
 
     _item = staticmethod(table_item)
 
-    def _total_row(self, table: QTableWidget, row: int, label_span: int) -> None:
-        table.setSpan(row, 0, 1, label_span)
-        table.setItem(row, 0, self._item(f"الإجمالي — {self.totals['count']} عقود", bold=True))
+    def _total_row(self, table: QTableWidget, row: int) -> None:
+        first, span = self._label_span()
+        if first >= 0:
+            if span > 1:
+                table.setSpan(row, first, 1, span)
+            table.setItem(row, first, self._item(f"الإجمالي — {self.totals['count']} عقود", bold=True))
         for column in range(table.columnCount()):
             item = table.item(row, column)
             if item is None:
@@ -325,7 +390,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
             table.setItem(last, PROGRESS_KEYS.index(key), self._item(_money(self.totals[key]), bold=True,
                                                                      negative=self.totals[key] < 0))
         self._progress_cells(last, self.totals, bold=True)
-        self._total_row(table, last, LABEL_SPAN)
+        self._total_row(table, last)
         table.setRowHeight(last, 48)
 
     def _progress_cells(self, index: int, row: dict[str, Any], bold: bool) -> None:
@@ -359,7 +424,7 @@ class ContractorContractsReportScreen(ContractingReportBase):
             if key in self.totals:
                 table.setItem(last, column, self._item(_money(self.totals[key]), bold=True,
                                                        negative=self.totals[key] < 0))
-        self._total_row(table, last, LABEL_SPAN)
+        self._total_row(table, last)
         table.setRowHeight(last, 42)
         self.band_header.sync()
         # after the columns settle; the header as context, so a closed report's timer never fires
