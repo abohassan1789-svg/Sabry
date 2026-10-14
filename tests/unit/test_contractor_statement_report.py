@@ -640,3 +640,88 @@ def test_service_with_a_contract():
     assert "k.contract_id = %s" in general_sql and general_params == [7]
     assert statement["general_payments"] == {"count": 0, "total": Decimal("0"), "types": []}
     assert ContractorStatementReportService(_Db()).statement(contractor_id=1)["general_payments"] is None
+
+
+# -- print (phase 3, user 2026-10-14) --------------------------------------------------------
+
+from app.reports.contractor_statement_print import (  # noqa: E402
+    CHARTS,
+    OPENING as P_OPENING,
+    PAYMENT as P_PAYMENT,
+    STACKED,
+    TOTAL as P_TOTAL,
+)
+from app.services.contractor_payment_service import CURRENT_BALANCE as CURRENT, EXTRACT_ACCOUNT_TYPES  # noqa: E402
+from app.ui.screens.contractor_statement_report_screen import TAB_DEFAULTS, TAB_TITLES  # noqa: E402
+
+
+class PrintService(FakeService):
+    """Two companies: the contractor's statement in the first, nothing in the second."""
+
+    def statements_by_company(self, **filters):
+        self.print_filters = filters
+        return [(10, self.statement(**filters)), (11, empty_statement())]
+
+    def company_print_info(self, ids):
+        names = {10: "الأفق للتطوير", 11: "شركة درة"}
+        return [{"company_id": i, "company_name": names[i], "address": None, "tax_registration_no": None,
+                 "logo": None} for i in ids]
+
+
+@pytest.fixture
+def printing(qt_app, settings):
+    widget = ContractorStatementReportScreen(PrintService(), settings=settings)
+    widget.resize(1700, 900)
+    yield widget
+    widget.close()
+
+
+def test_print_one_section_per_company_with_the_grand_total(printing):
+    document = printing.print_document()
+    assert printing.service.print_filters == printing.filters()
+    assert [section.company["company_name"] for section in document.sections] == ["الأفق للتطوير", "شركة درة"]
+    assert [account.title for account in document.grand] == [TAB_TITLES[a] for a in EXTRACT_ACCOUNT_TYPES]
+    statement = printing.statement["accounts"][CURRENT]["totals"]
+    assert document.grand[0].totals["balance"] == statement["balance"]
+    # the card opened the first company only; the second says so
+    assert "بطاقة المقاول محسوبة في الأفق للتطوير" in document.sections[1].accounts[0].rows[0].label
+    assert "بطاقة المقاول محسوبة" not in document.sections[0].accounts[0].rows[0].label
+    assert document.subtitle == NAME and document.title == "تقرير كشف حساب مقاول"
+    assert [caption for caption, _value in document.filters] == ["المشروع", "العقد"]
+
+
+def test_each_account_prints_the_columns_of_its_own_tab(printing):
+    document = printing.print_document()
+    keys = [[column.key for column in account.columns] for account in document.sections[0].accounts]
+    assert keys[0] == [key for key in TAB_DEFAULTS[CURRENT] if key != "contractor_name"]  # the name is in the header
+    assert "works_insurance" in keys[1] and "social_insurance" in keys[2]
+    printing.set_visible_columns(TAB_DEFAULTS[CURRENT] + ("works_value",))
+    keys = [column.key for column in printing.print_document().sections[0].accounts[0].columns]
+    assert "works_value" in keys
+
+
+def test_print_rows_follow_the_statement(printing):
+    account = printing.print_document().sections[0].accounts[0]
+    statement = printing.statement["accounts"][CURRENT]
+    assert account.rows[0].kind == P_OPENING and account.rows[-1].kind == P_TOTAL
+    assert account.rows[0].values["balance"] == statement["opening"]
+    payments = [row for row in account.rows if row.kind == P_PAYMENT]
+    assert len(payments) == statement["totals"]["payments_count"]
+    assert all(row.values["extract_no"].startswith("دفعة") and row.values.get("net") is None for row in payments)
+    assert len(account.series) == len(printing.statement["timeline"])
+
+
+def test_everyone_prints_the_contractor_name(printing):
+    printing.contractor_combo.setCurrentIndex(0)  # «الكل»
+    document = printing.print_document()
+    assert document.subtitle == "كل المقاولين"
+    assert "contractor_name" in [column.key for column in document.sections[0].accounts[0].columns]
+
+
+def test_the_preview_tab_is_remembered_for_print(printing):
+    assert printing.PRINTABLE and [key for key, _caption in printing.PRINT_LAYOUTS] == [STACKED, CHARTS]
+    assert printing.print_document().layout == STACKED
+    printing.print_layout_changed(CHARTS)
+    assert printing.print_document().layout == CHARTS
+    printing.print_layout_changed(STACKED)
+    assert printing.print_document().layout == STACKED

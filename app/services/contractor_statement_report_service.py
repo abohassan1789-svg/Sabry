@@ -279,6 +279,49 @@ class ContractorStatementReportService(ContractorContractsReportService):
 
     def statement(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
                   project_id: Any = None, contractor_id: Any = None, contract_id: Any = None) -> dict[str, Any]:
+        data = self._load(company_id, project_id, contractor_id, contract_id)
+        if data is None:
+            return empty_statement()
+        return self._build(data, data["card"], data["contracts"], data["extracts"], data["payments"],
+                           date_from, date_to)
+
+    def statements_by_company(self, date_from: Any = None, date_to: Any = None, company_id: Any = None,
+                              project_id: Any = None, contractor_id: Any = None,
+                              contract_id: Any = None) -> list[tuple[Any, dict[str, Any]]]:
+        """For print (user, 2026-10-14: «كل شركة على صفحاتها»): ``[(company_id, statement)]`` in
+        company-code order, one per company holding a contract, an extract or a payment.
+
+        Each company's statement has its own contracts, extracts and payments. The contractor's
+        card belongs to no company, so it opens the FIRST company's statement only (the others
+        open on zero plus their own movements before «من»); a payment with no project goes
+        there too. Added up, the companies give the screen's statement."""
+        data = self._load(company_id, project_id, contractor_id, contract_id)
+        if data is None:
+            return []
+        found = {row.get("company_id") for key in ("contracts", "extracts", "payments") for row in data[key]}
+        found.discard(None)
+        if not found:
+            return []
+        order = [row["company_id"] for row in self._db.fetch_all(
+            "SELECT company_id FROM client_companies WHERE company_id = ANY(%s) ORDER BY company_code",
+            [sorted(found)])]
+        order += sorted(found - set(order))  # a company missing from the list still prints, last
+        first = order[0]
+        result = []
+        for company in order:
+            def mine(row: dict[str, Any], company: Any = company) -> bool:
+                return row.get("company_id") == company or (company == first and row.get("company_id") is None)
+
+            result.append((company, self._build(
+                data, data["card"] if company == first else {}, [c for c in data["contracts"] if mine(c)],
+                [x for x in data["extracts"] if mine(x)], [p for p in data["payments"] if mine(p)],
+                date_from, date_to)))
+        return result
+
+    def _load(self, company_id: Any, project_id: Any, contractor_id: Any,
+              contract_id: Any) -> dict[str, Any] | None:
+        """The card (or the cards added up for «الكل»), the approved contracts, extracts and
+        payments under the filters, each with its ``company_id``; ``None`` = no such contractor."""
         everyone = contractor_id in (None, "")
         one_contract = contract_id not in (None, "")
         where, params = ["TRUE"], []
@@ -310,9 +353,10 @@ class ContractorStatementReportService(ContractorContractsReportService):
                 "WHERE contractor_id = %s AND status = 'approved'", [contractor_id]
             )
             if row is None:
-                return empty_statement()
+                return None
         contracts = self._db.fetch_all(
-            "SELECT k.contract_id, k.contractor_id, k.project_id, k.contract_value, k.advance_payment_pct "
+            "SELECT k.contract_id, k.contractor_id, k.project_id, k.contract_value, k.advance_payment_pct, "
+            "p.company_id "
             "FROM contractor_contracts k "
             "JOIN company_projects p ON p.project_id = k.project_id "
             "WHERE k.status = 'approved' AND " + " AND ".join(where),
@@ -321,7 +365,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
         extracts = self._db.fetch_all(
             "SELECT x.extract_id, x.extract_no, x.extract_date, x.contract_id, x.works_value, x.vat_pct, "
             "x.advance_payment_pct, x.withholding_tax_pct, x.works_insurance_pct, x.social_insurance_pct, "
-            "x.other_deductions, k.contract_no, k.contract_name, d.contractor_name "
+            "x.other_deductions, k.contract_no, k.contract_name, d.contractor_name, p.company_id "
             "FROM contractor_extracts x "
             "JOIN contractor_contracts k ON k.contract_id = x.contract_id "
             "JOIN contractors d ON d.contractor_id = k.contractor_id "
@@ -337,7 +381,7 @@ class ContractorStatementReportService(ContractorContractsReportService):
         payments = self._db.fetch_all(
             "SELECT y.payment_id, y.payment_date, y.amount, y.payment_method, y.reference_no, y.extract_id, "
             "y.account_type, "
-            "x.extract_no, pk.contract_no, pk.contract_name, d.contractor_name "
+            "x.extract_no, pk.contract_no, pk.contract_name, d.contractor_name, p.company_id "
             "FROM contractor_payments y "
             "JOIN contractors d ON d.contractor_id = y.contractor_id "
             "LEFT JOIN company_projects p ON p.project_id = y.project_id "  # a payment may have no project
@@ -346,16 +390,23 @@ class ContractorStatementReportService(ContractorContractsReportService):
             "WHERE y.status = 'approved' AND d.status = 'approved' AND " + " AND ".join(payment_where),
             params,
         )
-        accounts = build_accounts(row, extracts, payments, date_from, date_to)
+        return {"card": row, "contracts": contracts, "extracts": extracts, "payments": payments,
+                "contract_id": contract_id if one_contract else None}
+
+    def _build(self, data: dict[str, Any], card: dict[str, Any], contracts: list[dict[str, Any]],
+               extracts: list[dict[str, Any]], payments: list[dict[str, Any]],
+               date_from: Any, date_to: Any) -> dict[str, Any]:
+        accounts = build_accounts(card, extracts, payments, date_from, date_to)
         general = None
         advance_payments = payments
-        if one_contract:
+        contract_id = data["contract_id"]
+        if contract_id is not None:
             general = general_payments(self._general_payments(contract_id), date_from, date_to)
             shares = self.advance_allocation(contracts).get(contracts[0]["contract_id"], []) if contracts else []
             advance_payments = [{"amount": p["share"], "payment_date": p["payment_date"],
                                  "account_type": ADVANCE_PAYMENT} for p in shares]
         return _with_accounts(accounts, contract_advance(contracts, extracts, date_to, advance_payments),
-                              withholding_total(row.get("withholding_tax_amount"), extracts, date_from, date_to),
+                              withholding_total(card.get("withholding_tax_amount"), extracts, date_from, date_to),
                               general)
 
     def _general_payments(self, contract_id: Any) -> list[dict[str, Any]]:

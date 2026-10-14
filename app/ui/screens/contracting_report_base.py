@@ -315,6 +315,7 @@ class ContractingReportBase(QWidget):
     PERMISSION_BASE = ""
     CONTRACT_FILTER = False  # «العقد» on a second filter row; the service takes ``contract_id``
     PRINTABLE = False  # معاينة / طباعة / PDF / Excel on the second row; see ``print_document``
+    PRINT_LAYOUTS: tuple[tuple[str, str], ...] = ()  # (key, caption): print models as tabs in the preview
 
     def __init__(self, service: Any, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -521,10 +522,13 @@ class ContractingReportBase(QWidget):
         def show(document: Any) -> None:
             dialog = contracting_print.preview_dialog(
                 self, document, SESSION.can(f"{self.PERMISSION_BASE}.print"),
-                SESSION.can(f"{self.PERMISSION_BASE}.export"))
+                SESSION.can(f"{self.PERMISSION_BASE}.export"), self.PRINT_LAYOUTS, self.print_layout_changed)
             dialog.exec()
 
         self._with_document(show)
+
+    def print_layout_changed(self, key: str) -> None:
+        """A tab of ``PRINT_LAYOUTS`` picked in the preview: the screen may keep it for next time."""
 
     def print_report(self) -> None:
         from app.reports import contracting_print

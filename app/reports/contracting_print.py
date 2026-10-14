@@ -395,6 +395,15 @@ def _section_html(document: PrintDocument, section: PrintSection, last: bool) ->
     )
 
 
+def document_html(document: Any) -> str:
+    """The page of *document*: a report that prints its own way (كشف حساب مقاول) brings ``html()``."""
+    return document.html() if hasattr(document, "html") else build_html(document)
+
+
+def document_excel(document: Any, path: str | Path) -> Path:
+    return document.excel(path) if hasattr(document, "excel") else export_excel(document, path)
+
+
 def build_html(document: PrintDocument) -> str:
     sections = "".join(_section_html(document, section, index == len(document.sections) - 1)
                        for index, section in enumerate(document.sections))
@@ -676,7 +685,7 @@ def _hidden_view(parent: Any, document: PrintDocument, on_ready: Any) -> None:
     view.setVisible(False)
     holder = parent.__dict__.setdefault("_contracting_print_views", [])
     holder.append(view)
-    path = _write_temp_html(build_html(document))
+    path = _write_temp_html(document_html(document))
 
     def cleanup() -> None:
         _remove_quietly(path)
@@ -736,17 +745,22 @@ def save_excel(parent: Any, document: PrintDocument) -> None:
     if not path:
         return
     try:
-        export_excel(document, path)
+        document_excel(document, path)
     except Exception as exc:  # noqa: BLE001 - shown to the user
         QMessageBox.warning(parent, "تعذّر التصدير", f"تعذّر حفظ ملف Excel:\n{exc}")
         return
     open_file(parent, path)
 
 
-def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_export: bool) -> Any:
-    """«معاينة»: the pages as they will print, with طباعة / PDF / Excel / إغلاق."""
+def preview_dialog(parent: Any, document: Any, can_print: bool, can_export: bool,
+                   layouts: tuple[tuple[str, str], ...] = (), on_layout: Any = None) -> Any:
+    """«معاينة»: the pages as they will print, with طباعة / PDF / Excel / إغلاق.
+
+    *layouts* (``(key, caption)``) puts the report's print models on tabs over the pages
+    (كشف حساب مقاول, user 2026-10-14): a tab sets ``document.layout``, shows it and tells
+    *on_layout*; طباعة and PDF then print the tab on show."""
     from PySide6.QtCore import Qt, QUrl
-    from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QVBoxLayout
+    from PySide6.QtWidgets import QDialog, QHBoxLayout, QPushButton, QTabBar, QVBoxLayout
     from PySide6.QtWebEngineWidgets import QWebEngineView
 
     from app.ui.common.theme import GREEN, GREEN_DARK, _button_style
@@ -761,8 +775,8 @@ def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_ex
     bar = QHBoxLayout()
     bar.setSpacing(8)
     view = QWebEngineView(dialog)
-    path = _write_temp_html(build_html(document))
-    dialog.finished.connect(lambda *_: _remove_quietly(path))
+    paths = [_write_temp_html(document_html(document))]
+    dialog.finished.connect(lambda *_: [_remove_quietly(path) for path in paths])
 
     def _pdf() -> None:
         target = _ask_pdf_path(dialog, document)
@@ -802,8 +816,33 @@ def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_ex
     close.clicked.connect(dialog.reject)
     bar.addWidget(close)
     root.addLayout(bar)
+    dialog.layout_tabs = None
+    if layouts:
+        tabs = QTabBar()
+        tabs.setDrawBase(False)
+        tabs.setExpanding(False)
+        tabs.setStyleSheet(
+            "QTabBar::tab { background:#FFFFFF; color:#334155; border:1px solid #D9E2EC; border-radius:8px; "
+            "padding:6px 18px; margin-left:6px; font-size:13px; font-weight:900; }"
+            f"QTabBar::tab:selected {{ background:{GREEN}; color:#FFFFFF; border-color:{GREEN}; }}"
+        )
+        keys = [key for key, _caption in layouts]
+        for _key, caption in layouts:
+            tabs.addTab(caption)
+        tabs.setCurrentIndex(keys.index(document.layout) if document.layout in keys else 0)
+
+        def _switch(index: int) -> None:
+            document.layout = keys[index]
+            paths.append(_write_temp_html(document_html(document)))
+            view.setUrl(QUrl.fromLocalFile(paths[-1]))
+            if on_layout is not None:
+                on_layout(document.layout)
+
+        tabs.currentChanged.connect(_switch)
+        root.addWidget(tabs, 0, Qt.AlignRight)
+        dialog.layout_tabs = tabs
     root.addWidget(view, 1)
-    view.setUrl(QUrl.fromLocalFile(path))
+    view.setUrl(QUrl.fromLocalFile(paths[0]))
     dialog.view, dialog.buttons = view, buttons
     return dialog
 
@@ -811,6 +850,6 @@ def preview_dialog(parent: Any, document: PrintDocument, can_print: bool, can_ex
 __all__ = [
     "DATE", "MONEY", "PCT", "TEXT", "SERIAL", "ROW", "GROUP", "SUBTOTAL", "DEDUCTION",
     "PrintColumn", "PrintDocument", "PrintLine", "PrintSection", "deduction_cells", "font_px",
-    "build_html", "cell_text", "export_excel", "export_pdf", "label_span", "open_file", "page_layout",
+    "build_html", "cell_text", "document_excel", "document_html", "export_excel", "export_pdf", "label_span", "open_file", "page_layout",
     "preview_dialog", "print_report", "save_excel", "total_cells",
 ]

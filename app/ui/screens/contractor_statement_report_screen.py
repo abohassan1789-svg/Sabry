@@ -20,6 +20,10 @@ adds the period's deductions up per type. No balance changes: they are already
 inside صافي المستخلص.
 
 Every figure comes from ``contractor_statement_report_service``.
+
+Print (phase 3, user 2026-10-14): نموذج 2 «الحسابات التلاتة ورا بعض» and نموذج 5 «مع رسم
+الأرصدة» as two tabs of the preview (:mod:`app.reports.contractor_statement_print`); the tab
+last picked is kept per user for طباعة / PDF. Each company prints on its own pages.
 """
 
 from __future__ import annotations
@@ -40,6 +44,23 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.reports.contracting_print import DATE, MONEY, PCT, PrintColumn
+from app.reports.contracting_print import TEXT as TEXT_KIND
+from app.reports.contractor_statement_print import (
+    CHARTS,
+    DEDUCTION,
+    EXTRACT,
+    LAYOUTS,
+    OPENING,
+    PAYMENT,
+    STACKED,
+    TOTAL,
+    AccountTable,
+    StatementDocument,
+    StatementRow,
+    StatementSection,
+    grand_accounts,
+)
 from app.services.contractor_payment_service import (
     EXTRACT_ACCOUNT_TYPES,
     CURRENT_BALANCE,
@@ -53,6 +74,7 @@ from app.services.contractor_statement_report_service import (
     ContractorStatementReportService,
     empty_statement,
 )
+from app.security.session_context import SESSION
 from app.ui.common.theme import GREEN, TEXT
 from app.ui.screens.contracting_report_base import (
     DEDUCTION_BG,
@@ -80,6 +102,7 @@ from app.ui.screens.contractor_contracts_screen import _money, _rate_text
 PERMISSION_BASE = "contracting.contractor_statement_report"
 SETTINGS_KEY = "contractor_statement_report/columns"
 SHOW_DEDUCTIONS_KEY = "contractor_statement_report/show_deductions"  # the details button, per user
+PRINT_CHARTS_KEY = "contractor_statement_report/print_charts"  # the preview's tab last picked, per user
 
 TEXT_COL, RATE_COL, AMOUNT_COL = "text", "rate", "amount"
 # The user's columns in their order: (line key, header, kind).
@@ -193,6 +216,27 @@ def cell_text(line: dict[str, Any], key: str) -> str:
     return str(line.get(key) or "")
 
 
+PRINT_KIND = {TEXT_COL: TEXT_KIND, RATE_COL: PCT, AMOUNT_COL: MONEY}
+
+
+def print_column(key: str) -> PrintColumn:
+    if key == "date":
+        return PrintColumn(key, HEADER[key], DATE, nowrap=True)
+    return PrintColumn(key, HEADER[key], PRINT_KIND[KIND[key]])
+
+
+def print_value(line: dict[str, Any], key: str) -> Any:
+    """A line's raw value in a printed column, ``None`` where the screen shows nothing."""
+    payment = line["kind"] == KIND_PAYMENT
+    if key == "extract_no" and payment:
+        return payment_text(line)
+    if payment and key not in ("date", "contractor_name", "contract_label", "account_type", "paid", "balance"):
+        return None
+    if key == "paid" and not payment:
+        return None
+    return line.get(key)
+
+
 def _short_money(value: Any) -> str:
     return f"{float(value):,.0f}"
 
@@ -289,6 +333,8 @@ class ContractorStatementReportScreen(ContractingReportBase):
     ICON = "📒"
     PERMISSION_BASE = PERMISSION_BASE
     CONTRACT_FILTER = True  # «العقد» (user, 2026-10-13); the general payments get their own card
+    PRINTABLE = True  # معاينة / طباعة / PDF / Excel (user, 2026-10-14)
+    PRINT_LAYOUTS = LAYOUTS  # نموذج 2 and نموذج 5 as tabs of the preview
 
     def __init__(self, service: ContractorStatementReportService | None = None,
                  parent: QWidget | None = None, settings: QSettings | None = None) -> None:
@@ -674,11 +720,8 @@ class ContractorStatementReportScreen(ContractingReportBase):
         table.setRowCount(0)  # no stale cell from a longer run survives
         self.row_kinds = []
         statement = self._account_statement()
-        date_from = self.filters()["date_from"]
-        cards = "بطاقات كل المقاولين" if self._everyone() else "بطاقة المقاول"
-        caption = (f"رصيد أول المدة — {TAB_TITLES[self.account]} قبل {date_text(date_from)}" if date_from
-                   else f"رصيد أول المدة — {CARD_FIELD[self.account]} في {cards}")
-        self._add_label_row(ROW_OPENING, caption, {"balance": statement["opening"]}, OPENING_BG)
+        self._add_label_row(ROW_OPENING, self._opening_caption(self.account), {"balance": statement["opening"]},
+                            OPENING_BG)
         details = self.show_deductions and self.account == CURRENT_BALANCE
         for line in statement["lines"]:
             self._add_line(line)
@@ -686,10 +729,19 @@ class ContractorStatementReportScreen(ContractingReportBase):
                 for deduction in line.get("deductions") or []:
                     self._add_deduction_row(deduction)
         totals = statement["totals"]
-        caption = (f"الإجمالي — {TAB_TITLES[self.account]} — {totals['extracts_count']} مستخلصات · "
-                   f"{totals['payments_count']} دفعات")
-        self._add_label_row(ROW_TOTAL, caption, totals, TOTAL_BG)
+        self._add_label_row(ROW_TOTAL, self._total_caption(self.account, totals), totals, TOTAL_BG)
         self.fitter.fit()
+
+    def _opening_caption(self, account: str) -> str:
+        date_from = self.filters()["date_from"]
+        cards = "بطاقات كل المقاولين" if self._everyone() else "بطاقة المقاول"
+        return (f"رصيد أول المدة — {TAB_TITLES[account]} قبل {date_text(date_from)}" if date_from
+                else f"رصيد أول المدة — {CARD_FIELD[account]} في {cards}")
+
+    @staticmethod
+    def _total_caption(account: str, totals: dict[str, Any]) -> str:
+        return (f"الإجمالي — {TAB_TITLES[account]} — {totals['extracts_count']} مستخلصات · "
+                f"{totals['payments_count']} دفعات")
 
     def _new_row(self, kind: str, height: int) -> int:
         index = self.table.rowCount()
@@ -749,3 +801,71 @@ class ContractorStatementReportScreen(ContractingReportBase):
             self.table.setItem(index, column, item)
         if span > 1:
             self.table.setSpan(index, first, 1, span)
+
+    # -- print / export ----------------------------------------------------------------
+
+    def print_layout_changed(self, key: str) -> None:
+        save_flag(self.settings, PRINT_CHARTS_KEY, key == CHARTS)
+
+    def print_columns(self, account: str) -> list[PrintColumn]:
+        """The tab's own columns; «اسم المقاول» only when the statement is everyone's (else
+        the name is in the header)."""
+        keys = [key for key in self.tab_columns[account] if key != "contractor_name" or self._everyone()]
+        return [print_column(key) for key in keys or TAB_DEFAULTS[account]]
+
+    def print_document(self) -> StatementDocument:
+        """The statement for the current filters (run again, so the header and the lines agree),
+        one section per company (user, 2026-10-14)."""
+        self.run_report()
+        filters = self.filters()
+        parts = self.service.statements_by_company(**filters) or [(self.company_combo.currentData(), self.statement)]
+        ids = [company for company, _statement in parts if company not in (None, "")]
+        info = {company["company_id"]: company for company in self.service.company_print_info(ids)}
+        companies = [info.get(company) or {"company_name": "كل الشركات"} for company, _statement in parts]
+        # The card opens the first company's statement only: the others say where it went.
+        sections = [self._print_section(company, statement, companies[0]["company_name"] if index else None)
+                    for index, (company, (_id, statement)) in enumerate(zip(companies, parts))]
+        texts = dict(self.filter_texts())
+        if self._everyone():
+            who = "كل المقاولين"
+        elif filters["contractor_id"] is not None:
+            who = self.contractor_combo.currentText()
+        else:
+            who = texts.get("العقد", "")
+        user = (SESSION.user or {}).get("username") if SESSION.user else None
+        return StatementDocument(
+            title=self.TITLE,
+            subtitle=who,
+            period=texts.get("الفترة", ""),
+            filters=[(caption, value) for caption, value in self.filter_texts() if caption in ("المشروع", "العقد")],
+            sections=sections,
+            grand=grand_accounts(sections) if len(sections) > 1 else None,
+            printed_by=user or "",
+            layout=CHARTS if load_flag(self.settings, PRINT_CHARTS_KEY) else STACKED,
+        )
+
+    def _print_section(self, company: dict[str, Any], statement: dict[str, Any],
+                       card_elsewhere: str | None = None) -> StatementSection:
+        """*card_elsewhere*: the company whose statement the contractor's card opened (not this one)."""
+        accounts = []
+        for account in EXTRACT_ACCOUNT_TYPES:
+            data = statement["accounts"][account]
+            columns = self.print_columns(account)
+            caption = self._opening_caption(account)
+            if card_elsewhere and not self.filters()["date_from"]:
+                caption = f"رصيد أول المدة — {TAB_TITLES[account]} (بطاقة المقاول محسوبة في {card_elsewhere})"
+            rows = [StatementRow(OPENING, {"balance": data["opening"]}, caption)]
+            details = self.show_deductions and account == CURRENT_BALANCE
+            for line in data["lines"]:
+                payment = line["kind"] == KIND_PAYMENT
+                rows.append(StatementRow(PAYMENT if payment else EXTRACT,
+                                         {column.key: print_value(line, column.key) for column in columns}))
+                if details and not payment:
+                    rows += [StatementRow(DEDUCTION, label=deduction_text(deduction), amount=deduction.get("amount"))
+                             for deduction in line.get("deductions") or []]
+            totals = data["totals"]
+            rows.append(StatementRow(TOTAL, dict(totals), self._total_caption(account, totals)))
+            series = [float(point["balances"][account]) for point in statement.get("timeline") or []]
+            accounts.append(AccountTable(account, TAB_TITLES[account], ACCENT[account], columns, rows, totals, series))
+        return StatementSection(company, accounts, statement["contracts"], statement["withholding"],
+                                statement.get("deductions") or {}, statement.get("general_payments"))
