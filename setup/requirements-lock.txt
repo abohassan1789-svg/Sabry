@@ -1,0 +1,34 @@
+# Exact library versions the app is tested and run with (frozen from the daily runtime venv, 2026-10-15).
+# setup/build.ps1 installs exactly these. To upgrade a library, test the app first, then update this file.
+annotated-types==0.8.0
+arabic-reshaper==3.0.1
+cffi==2.1.1
+charset-normalizer==3.5.1
+cryptography==50.0.1
+docopt==0.6.2
+et_xmlfile==2.0.0
+greenlet==3.5.5
+num2words==0.5.14
+openpyxl==3.1.5
+pillow==12.3.0
+psycopg==3.3.5
+psycopg-binary==3.3.5
+pycparser==3.0
+pydantic==2.13.5
+pydantic_core==2.46.5
+Pygments==2.21.0
+pyodbc==5.3.0
+PySide6==6.11.2
+PySide6_Addons==6.11.2
+PySide6_Essentials==6.11.2
+python-bidi==0.6.11
+python-dotenv==1.2.3
+qrcode==8.2
+QtAwesome==1.4.2
+QtPy==2.4.3
+reportlab==5.0.1
+shiboken6==6.11.2
+SQLAlchemy==2.0.52
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.3

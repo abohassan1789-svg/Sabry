@@ -36,3 +36,10 @@ customers_template.xlsx
 
 # Access export with real customer data
 app/database/migrations/.tmp_access_export/
+
+setup/.venv/
+setup/build/
+setup/dist/
+setup/Output/
+!setup/ahcode.spec
+!setup/dbcheck.spec
