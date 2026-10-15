@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 
 from app.security.session_context import SESSION
 from app.ui.common.theme import GREEN, TEXT, _button_style
+from app.ui.common.searchable_combos import tag_contractor_items
 from app.ui.screens.contractor_contracts_screen import _COMBO_QSS, _EDITOR_QSS, _select_data
 
 MUTED = "#475569"
@@ -562,8 +563,9 @@ class ContractingReportBase(QWidget):
 
     def load_choices(self) -> None:
         self._fill(self.company_combo, self.service.company_choices(), "company_id", lambda r: r["company_name"])
-        self._fill(self.contractor_combo, self.service.contractor_choices(), "contractor_id",
-                   lambda r: r["contractor_name"])
+        contractors = self.service.contractor_choices()
+        self._fill(self.contractor_combo, contractors, "contractor_id", lambda r: r["contractor_name"])
+        tag_contractor_items(self.contractor_combo, contractors)
         self._load_projects()
         self._load_contracts()
 

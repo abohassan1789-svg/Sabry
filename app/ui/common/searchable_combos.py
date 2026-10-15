@@ -12,12 +12,18 @@ dialogs it parents, built now or later) is hooked:
   validator) gets a contains-completer: typing shows the matching items.
 
 Matching ignores case and the usual Arabic spelling variants (أ/إ/آ/ا, ة/ه,
-ى/ي, diacritics). A combo opts out with ``combo.setProperty("noSearch", True)``.
+ى/ي, diacritics, Arabic-Indic digits). A combo opts out with
+``combo.setProperty("noSearch", True)``.
+
+An item can also be found by text it doesn't show, kept under ``SEARCH_ROLE``:
+every contractor drop list is searched by الكود، رقم التسجيل and الاسم
+(user, 2026-10-15) — see ``tag_contractor_items``.
 """
 
 from __future__ import annotations
 
 import re
+from typing import Any, Iterable
 
 from PySide6.QtCore import QEvent, QObject, QRect, Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QKeyEvent
@@ -35,7 +41,14 @@ from PySide6.QtWidgets import (
 _HOOKED = "_searchHooked"
 _ENABLED = "comboSearchEnabled"
 _DIACRITICS = re.compile(r"[\u0610-\u061a\u064b-\u065f\u0670\u0640]")  # tashkeel + tatweel
-_LETTER_MAP = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ة": "ه", "ى": "ي", "ؤ": "و", "ئ": "ي"})
+_LETTER_MAP = str.maketrans({"أ": "ا", "إ": "ا", "آ": "ا", "ٱ": "ا", "ة": "ه", "ى": "ي", "ؤ": "و", "ئ": "ي",
+                             **{chr(0x0660 + d): str(d) for d in range(10)},
+                             **{chr(0x06F0 + d): str(d) for d in range(10)}})
+SEARCH_ROLE = Qt.UserRole + 1500  # extra text an item is also found by (not shown)
+SEARCH_HINT = "searchHint"  # combo property: the search box's placeholder
+_DEFAULT_HINT = "اكتب جزء من الاسم للبحث…"
+CONTRACTOR_HINT = "اكتب الكود أو رقم التسجيل أو الاسم…"
+CONTRACTOR_SEARCH_KEYS = ("contractor_code", "registration_no", "contractor_name")
 _EDIT_QSS = (
     "QLineEdit { background:#F0FDF4; border:none; border-bottom:1px solid #15803D; "
     "padding:5px 8px; font-size:13px; font-weight:700; color:#0F172A; }"
@@ -51,6 +64,23 @@ def normalize_search_text(text: str) -> str:
 def matches(item_text: str, typed: str) -> bool:
     needle = normalize_search_text(typed)
     return not needle or needle in normalize_search_text(item_text)
+
+
+def contractor_search_text(row: dict[str, Any]) -> str:
+    return " ".join(str(row.get(key) or "") for key in CONTRACTOR_SEARCH_KEYS)
+
+
+def tag_contractor_items(combo: QComboBox, rows: Iterable[dict[str, Any]]) -> None:
+    """Let a filled contractor drop list be searched by code, registration no and name.
+
+    Matches each item's data (the contractor_id) against *rows*; items that aren't a
+    contractor (e.g. «الكل») are left alone."""
+    texts = {str(row["contractor_id"]): contractor_search_text(row) for row in rows}
+    for index in range(combo.count()):
+        data = combo.itemData(index)
+        if data is not None and str(data) in texts:
+            combo.setItemData(index, texts[str(data)], SEARCH_ROLE)
+    combo.setProperty(SEARCH_HINT, CONTRACTOR_HINT)
 
 
 def _is_typing_key(event: QKeyEvent) -> bool:
@@ -91,7 +121,6 @@ class _ComboSearch(QObject):
             self.edit.setObjectName("comboSearchBox")
             self.edit.setReadOnly(True)
             self.edit.setFocusPolicy(Qt.NoFocus)
-            self.edit.setPlaceholderText("اكتب جزء من الاسم للبحث…")
             self.edit.setLayoutDirection(Qt.RightToLeft)
             self.edit.setStyleSheet(_EDIT_QSS)
             layout.insertWidget(0, self.edit)
@@ -102,6 +131,7 @@ class _ComboSearch(QObject):
                 container.setStyleSheet(
                     container.styleSheet() + "QComboBoxPrivateScroller { max-height:0px; min-height:0px; }"
                 )
+        self.edit.setPlaceholderText(str(self.combo.property(SEARCH_HINT) or _DEFAULT_HINT))
         return self.edit
 
     # --- events -------------------------------------------------------------
@@ -182,8 +212,10 @@ class _ComboSearch(QObject):
         model = self.combo.model()
         root = self.combo.rootModelIndex()
         for row in range(model.rowCount(root)):
-            label = str(model.index(row, column, root).data(Qt.DisplayRole) or "")
-            show = matches(label, self.text) if self.text else True
+            index = model.index(row, column, root)
+            label = str(index.data(Qt.DisplayRole) or "")
+            extra = index.data(SEARCH_ROLE)
+            show = matches(f"{label} {extra}" if extra else label, self.text) if self.text else True
             self.view.setRowHidden(row, not show)
             if show and first_visible < 0 and (label.strip() or not self.text):
                 first_visible = row

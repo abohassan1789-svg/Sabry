@@ -16,7 +16,17 @@ from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QVBoxLayout, QWidget
 
 from app.ui import main_window
-from app.ui.common.searchable_combos import _ComboSearch, enable_combo_search, matches, normalize_search_text
+from app.ui.common.searchable_combos import (
+    CONTRACTOR_HINT,
+    SEARCH_HINT,
+    SEARCH_ROLE,
+    _ComboSearch,
+    contractor_search_text,
+    enable_combo_search,
+    matches,
+    normalize_search_text,
+    tag_contractor_items,
+)
 
 NAMES = ["أحمد سعيد", "محمد علي", "مؤسسة الأمل", "شركة النور", "سعيد حسن", "علي أسامة", "مقاول البناء"]
 
@@ -427,3 +437,142 @@ def test_users_saves_the_role_found_by_search(qt_app, monkeypatch):
     page.save_user()
     assert created and created[-1]["role_id"] == 2
     page.close()
+
+
+# --- contractors: searched by الكود، رقم التسجيل and الاسم (user, 2026-10-15) ---------------
+
+CONTRACTOR_ROWS = [
+    {"contractor_id": 7, "contractor_code": "A-H/CD-1001", "registration_no": "55123", "contractor_name": "أحمد سعيد"},
+    {"contractor_id": 8, "contractor_code": "A-H/CD-1002", "registration_no": "77801", "contractor_name": "شركة النور"},
+    {"contractor_id": 9, "contractor_code": "A-H/CD-1003", "registration_no": None, "contractor_name": "مقاول البناء"},
+]
+
+
+@pytest.fixture
+def contractor_combo(qt_app):
+    host = QWidget()
+    QVBoxLayout(host)
+    box = QComboBox()
+    host.layout().addWidget(box)
+    box.addItem("الكل", None)
+    for row in CONTRACTOR_ROWS:
+        box.addItem(row["contractor_name"], row["contractor_id"])  # shows the name only
+    tag_contractor_items(box, CONTRACTOR_ROWS)
+    enable_combo_search(host)
+    host.resize(400, 300)
+    host.show()
+    qt_app.processEvents()
+    yield box
+    box.hidePopup()
+    host.close()
+
+
+def _shown_data(combo):
+    return [combo.itemData(row) for row in range(combo.count()) if not combo.view().isRowHidden(row)]
+
+
+@pytest.mark.parametrize("typed, expected", [
+    ("77801", [8]),        # رقم التسجيل
+    ("cd-1003", [9]),      # الكود, any part, any case
+    ("1001", [7]),
+    ("النور", [8]),        # الاسم
+    ("٥٥١٢٣", [7]),        # typed with Arabic-Indic digits
+])
+def test_a_contractor_is_found_by_code_registration_or_name(contractor_combo, typed, expected):
+    contractor_combo.setFocus()
+    _type(contractor_combo, typed)
+    assert _shown_data(contractor_combo) == expected
+
+
+def test_the_contractor_search_box_says_what_it_searches(contractor_combo):
+    contractor_combo.setFocus()
+    _type(contractor_combo, "5")
+    edit = contractor_combo.view().parentWidget().findChild(QLineEdit, "comboSearchBox")
+    assert edit.placeholderText() == CONTRACTOR_HINT
+    assert contractor_combo.itemData(0, SEARCH_ROLE) is None  # «الكل» isn't a contractor
+
+
+def test_contractor_search_text():
+    assert contractor_search_text(CONTRACTOR_ROWS[0]) == "A-H/CD-1001 55123 أحمد سعيد"
+    assert contractor_search_text(CONTRACTOR_ROWS[2]) == "A-H/CD-1003  مقاول البناء"
+
+
+def _with_registration(monkeypatch, fake_class):
+    """The fake's contractors, each with a registration no «REG<id>»."""
+    original = fake_class.contractor_choices
+
+    def choices(self):
+        return [{**row, "registration_no": f"REG{row['contractor_id']}"} for row in original(self)]
+
+    monkeypatch.setattr(fake_class, "contractor_choices", choices)
+
+
+def _contractor_lists(qt_app, tmp_path):
+    """Every contractor drop list of the contracting screens, built on the tests' fakes."""
+    from PySide6.QtCore import QSettings
+
+    from tests.unit import (test_contractor_contracts_screen as contracts_t, test_contractor_extracts_screen as extracts_t,
+                            test_contractor_payments_screen as payments_t, test_contractor_statement_report as statement_t,
+                            test_contractors_dashboard as dashboard_t)
+    from app.ui.screens.contractor_contracts_screen import ContractorContractsScreen
+    from app.ui.screens.contractor_extracts_screen import ContractorExtractsScreen
+    from app.ui.screens.contractor_payments_screen import ContractorPaymentsScreen
+    from app.ui.screens.contractor_statement_report_screen import ContractorStatementReportScreen
+    from app.ui.screens.contractors_dashboard_screen import ContractorsDashboardScreen
+
+    settings = QSettings(str(tmp_path / "report.ini"), QSettings.IniFormat)
+    contracts = ContractorContractsScreen(contracts_t.FakeService())
+    extracts = ContractorExtractsScreen(extracts_t.FakeService())
+    payments = ContractorPaymentsScreen(payments_t.FakeService())
+    report = ContractorStatementReportScreen(statement_t.FakeService(), settings=settings)
+    dashboard = ContractorsDashboardScreen(dashboard_t.FakeService())
+    screens = [contracts, extracts, payments, report, dashboard]  # kept alive while their lists are read
+    return screens, {
+        "contracts form": (contracts.tree_form.contractor, contracts_t.FakeService),
+        "contracts card picker": (contracts.contractor_picker, contracts_t.FakeService),
+        "extracts": (extracts.contractor_picker, extracts_t.FakeService),
+        "payments": (payments.board_contractor, payments_t.FakeService),
+        "reports": (report.contractor_combo, statement_t.FakeService),
+        "dashboard": (dashboard.contractor_combo, dashboard_t.FakeService),
+    }
+
+
+def test_every_contractor_list_carries_code_registration_and_name(qt_app, monkeypatch, tmp_path):
+    from tests.unit import (test_contractor_contracts_screen, test_contractor_extracts_screen,
+                            test_contractor_payments_screen, test_contractor_statement_report,
+                            test_contractors_dashboard)
+    from app.ui.screens import contractor_contracts_screen, contractor_extracts_screen, contractor_payments_screen
+
+    _quiet(monkeypatch, contractor_contracts_screen, contractor_extracts_screen, contractor_payments_screen)
+    for module in (test_contractor_contracts_screen, test_contractor_extracts_screen, test_contractor_payments_screen,
+                   test_contractor_statement_report, test_contractors_dashboard):
+        _with_registration(monkeypatch, module.FakeService)
+    screens, lists = _contractor_lists(qt_app, tmp_path)
+    for name, (combo, fake_class) in lists.items():
+        rows = fake_class().contractor_choices()
+        assert rows, name
+        for row in rows:
+            index = combo.findData(row["contractor_id"])
+            assert index >= 0, name
+            assert combo.itemData(index, SEARCH_ROLE) == contractor_search_text(row), name
+            assert f"REG{row['contractor_id']}" in combo.itemData(index, SEARCH_ROLE), name
+        assert combo.property(SEARCH_HINT) == CONTRACTOR_HINT, name
+    for screen in screens:
+        screen.close()
+
+
+def test_payments_contractor_found_by_registration_no(qt_app, monkeypatch):
+    from tests.unit.test_contractor_payments_screen import FakeService
+    from app.ui.screens import contractor_payments_screen as screen_module
+
+    _quiet(monkeypatch, screen_module)
+    _with_registration(monkeypatch, FakeService)
+    screen = screen_module.ContractorPaymentsScreen(FakeService())
+    enable_combo_search(screen)
+    screen.resize(1700, 860)
+    screen.show()
+    qt_app.processEvents()
+    _pick(screen.board_contractor, "REG2")
+    assert screen.board_contractor.currentData() == 2
+    assert (screen.company_id, screen.project_id) == (20, 21)
+    screen.close()

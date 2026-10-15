@@ -71,6 +71,7 @@ from app.services.contractor_extract_service import (
     extract_amounts,
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
+from app.ui.common.searchable_combos import tag_contractor_items
 from app.ui.dialogs.contractor_extract_picker import ContractorExtractPickerDialog
 from app.ui.dialogs.extract_deductions_dialog import ExtractDeductionsDialog
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
@@ -951,6 +952,7 @@ class ContractorExtractsScreen(QWidget):
             contract_id = None
         self._fill_combo(self.contractor_picker, contractors,
                          lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id", keep)
+        tag_contractor_items(self.contractor_picker, contractors)
         self._fill_combo(self.contract_picker_b, contracts,
                          lambda r: f"{r['contract_no']} — {r['contractor_name']} — {r['project_name']}",
                          "contract_id", contract_id)

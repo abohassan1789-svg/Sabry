@@ -68,6 +68,7 @@ from app.services.contractor_extract_service import (
     WITHHOLDING_OPTIONS,
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
+from app.ui.common.searchable_combos import tag_contractor_items
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix, status_chip
 from app.ui.common.live_lists import notify_data_changed
 from app.ui.dialogs.contract_attachments_dialog import ContractAttachmentsDialog
@@ -373,6 +374,7 @@ class ContractForm(QWidget):
             self.contractor.clear()
             for row in contractors:
                 self.contractor.addItem(f"{row['contractor_code']} — {row['contractor_name']}", row["contractor_id"])
+            tag_contractor_items(self.contractor, contractors)
             self.company.clear()
             for row in companies:
                 self.company.addItem(f"{row['company_code']} — {row['company_name']}", row["company_id"])
@@ -877,6 +879,7 @@ class ContractorContractsScreen(QWidget):
             rows = []
         for row in rows:
             self.contractor_picker.addItem(f"{row['contractor_code']} — {row['contractor_name']}", row["contractor_id"])
+        tag_contractor_items(self.contractor_picker, rows)
         _select_data(self.contractor_picker, keep)
         self.contractor_picker.blockSignals(False)
 

@@ -282,7 +282,7 @@ class ContractorPaymentService:
 
     def contractor_choices(self) -> list[dict[str, Any]]:
         return self._db.fetch_all(
-            "SELECT contractor_id, contractor_code, contractor_name, contractor_type, "
+            "SELECT contractor_id, contractor_code, contractor_name, contractor_type, registration_no, "
             "current_balance, works_insurance_amount, social_insurance_amount "
             "FROM contractors WHERE status = 'approved' ORDER BY contractor_code"
         )

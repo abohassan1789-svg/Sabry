@@ -91,6 +91,7 @@ from app.services.contractor_payment_service import (
     unassigned_paid,
 )
 from app.ui.common.theme import GREEN, GREEN_DARK, TEXT, _button_style
+from app.ui.common.searchable_combos import tag_contractor_items
 from app.ui.dialogs.contractor_payment_picker import ContractorPaymentPickerDialog
 from app.ui.screens.approval_controls import ApprovalControls, draft_suffix
 from app.ui.common.live_lists import notify_data_changed
@@ -829,6 +830,7 @@ class ContractorPaymentsScreen(QWidget):
             self.contracts, self.advance_paid, self.places = [], {}, []
         self._fill_combo(self.board_contractor, self.contractors,
                          lambda r: f"{r['contractor_code']} — {r['contractor_name']}", "contractor_id", self.contractor_id)
+        tag_contractor_items(self.board_contractor, self.contractors)
         self._build_tree()
 
     def _company_choice(self) -> Any:
