@@ -225,10 +225,11 @@ class ConnectionProfile:
 
     def database_url(self) -> str:
         """Build a SQLAlchemy URL (psycopg driver) from the profile."""
-        from urllib.parse import quote_plus
+        from urllib.parse import quote
 
-        user = quote_plus(self.db_user)
-        pw = quote_plus(self.db_password or "")
+        # quote (not quote_plus): libpq decodes %XX but not "+" as a space.
+        user = quote(self.db_user, safe="")
+        pw = quote(self.db_password or "", safe="")
         auth = f"{user}:{pw}" if pw else user
         return (
             f"postgresql+psycopg://{auth}@{self.effective_host}:{int(self.server_port)}"

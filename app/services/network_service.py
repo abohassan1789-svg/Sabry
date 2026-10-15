@@ -173,12 +173,13 @@ def test_database(
             )
         return reach
 
-    conninfo = (
-        f"host={host} port={int(port)} dbname={db_name} user={user} "
-        f"password={password} sslmode={sslmode} connect_timeout={int(timeout)}"
-    )
+    # Keyword arguments, not a "key=value" string: psycopg quotes each value, so
+    # a password with spaces, quotes or backslashes is passed unchanged and is
+    # never echoed back in a parse error.
+    params = dict(host=host, port=int(port), dbname=db_name, user=user,
+                  password=password, sslmode=sslmode, connect_timeout=int(timeout))
     try:
-        with psycopg.connect(conninfo) as conn:
+        with psycopg.connect(**params) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT 1")
                 cur.fetchone()

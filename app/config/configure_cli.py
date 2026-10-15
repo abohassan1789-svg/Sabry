@@ -127,6 +127,16 @@ def _cmd_create_db(args) -> int:
         )
 
 
+def db_url(host: str, port: int, db: str, user: str, password: str, sslmode: str) -> str:
+    """libpq URL with user/password percent-encoded (libpq decodes %XX, not "+")."""
+    from urllib.parse import quote
+
+    auth = quote(user, safe="")
+    if password:
+        auth += ":" + quote(password, safe="")
+    return f"postgresql://{auth}@{host}:{port}/{db}?sslmode={sslmode}"
+
+
 def _cmd_provision(args) -> int:
     """Provision the application schema and seed essential system data.
 
@@ -137,15 +147,8 @@ def _cmd_provision(args) -> int:
     is ever written. Uses an explicit connection built from the arguments so it
     does not depend on any profile write order.
     """
-    from urllib.parse import quote_plus
-
     password = _resolve_password(args)
-    user = quote_plus(args.user)
-    pw = quote_plus(password or "")
-    auth = f"{user}:{pw}" if pw else user
-    url = (
-        f"postgresql://{auth}@{args.host}:{args.port}/{args.db}?sslmode={args.sslmode}"
-    )
+    url = db_url(args.host, args.port, args.db, args.user, password, args.sslmode)
     try:
         from app.database.db import Database
         from app.database.schema_bootstrap import ensure_full_schema

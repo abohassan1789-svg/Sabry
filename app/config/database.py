@@ -5,6 +5,8 @@ No database connection is opened at import time.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from app.config.settings import Settings
 
 # Every live psycopg connection the app opens uses these. ``connect_timeout``
@@ -17,8 +19,14 @@ APPLICATION_NAME = "CRM"
 
 
 def build_database_url(settings: Settings) -> str:
+    # Percent-encode user and password: libpq and SQLAlchemy both decode %XX, so
+    # a password with a space, "@", "/", "%" or Arabic text reaches the server
+    # unchanged instead of being cut or misread as host/port.
+    user = quote(settings.db_user or "", safe="")
+    password = quote(settings.db_password or "", safe="")
+    auth = f"{user}:{password}" if password else user
     return (
-        f"postgresql+psycopg://{settings.db_user}:{settings.db_password}"
+        f"postgresql+psycopg://{auth}"
         f"@{settings.db_host}:{settings.db_port}/{settings.db_name}"
     )
 
