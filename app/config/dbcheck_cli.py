@@ -43,7 +43,12 @@ def main(argv: list[str] | None = None) -> int:
         else:
             result, missing = net.test_database(
                 args.host, args.port, args.db, args.user, password, sslmode=args.sslmode), False
-        message = result.message.replace(password, "******") if password else result.message
+        message = result.message
+        if not result.ok:
+            message = net.friendly_db_message(args.host, args.port, args.db, args.user,
+                                              result.detail or result.message)
+        if password:
+            message = message.replace(password, "******")
         return cli_output.emit({"ok": result.ok, "db_missing": missing, "message": message},
                                ok=result.ok)
     except Exception as exc:  # noqa: BLE001 - never show a traceback in the wizard

@@ -217,3 +217,23 @@ def test_database_or_server(
             f"Server {host}:{port} reachable; database '{db_name}' will be created.",
         ), True
     return server, True
+
+
+def friendly_db_message(host: str, port: int, db_name: str, user: str, detail: str) -> str:
+    """One short sentence for the installer instead of psycopg's multi-line error."""
+    text = (detail or "").lower()
+    if "password authentication failed" in text:
+        return f'Wrong password for user "{user}".'
+    if "does not exist" in text and "database" in text:
+        return (f'Database "{db_name}" does not exist on {host}. Install the MAIN machine '
+                "first, or check the Host / IP address.")
+    if "role" in text and "does not exist" in text:
+        return f'User "{user}" does not exist on the PostgreSQL server.'
+    if any(k in text for k in ("connection refused", "timeout", "timed out",
+                               "could not connect", "no route", "could not translate")):
+        return (f"Cannot reach PostgreSQL at {host}:{port}. Check that the PostgreSQL "
+                "service is running, the Host / IP address is correct, and the firewall "
+                "allows port " + str(port) + ".")
+    first = (detail or "").strip().splitlines()
+    return first[0] if first else "Connection failed."
+

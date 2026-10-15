@@ -81,3 +81,39 @@ def test_dbcheck_cli_matches_configure_cli(monkeypatch, tmp_path):
     assert code == 0 and data["db_missing"] is True
     code = dbcheck_cli.main(["--host", "localhost", "--port", "5432", "--db", "SABCONTDB"])
     assert code == 1
+
+
+def test_friendly_message_wrong_password():
+    detail = ('connection to server at "127.0.0.1", port 5432 failed: FATAL:  password '
+              'authentication failed for user "postgres"\nMultiple connection attempts failed.')
+    msg = net.friendly_db_message("localhost", 5432, "SABCONTDB", "postgres", detail)
+    assert msg == 'Wrong password for user "postgres".'
+
+
+def test_friendly_message_server_unreachable():
+    detail = 'connection to server at "192.168.1.10", port 5432 failed: Connection refused'
+    msg = net.friendly_db_message("192.168.1.10", 5432, "SABCONTDB", "postgres", detail)
+    assert msg.startswith("Cannot reach PostgreSQL at 192.168.1.10:5432")
+
+
+def test_friendly_message_missing_database_on_client():
+    detail = 'FATAL:  database "SABCONTDB" does not exist'
+    msg = net.friendly_db_message("192.168.1.10", 5432, "SABCONTDB", "postgres", detail)
+    assert msg.startswith('Database "SABCONTDB" does not exist on 192.168.1.10')
+
+
+def test_friendly_message_falls_back_to_first_line():
+    msg = net.friendly_db_message("h", 1, "d", "u", "something odd\nmore")
+    assert msg == "something odd"
+
+
+def test_dbcheck_reports_friendly_message(monkeypatch, tmp_path):
+    def fake(*a, **k):
+        d = 'FATAL:  password authentication failed for user "postgres"'
+        return CheckResult(False, f"Database connection failed: {d}", detail=d)
+    monkeypatch.setattr(net, "test_database", fake)
+    out = tmp_path / "r.json"
+    dbcheck_cli.main(["--result-file", str(out), "--host", "localhost", "--port", "5432",
+                      "--db", "SABCONTDB"])
+    assert json.loads(out.read_text(encoding="utf-8-sig"))["message"] == \
+        'Wrong password for user "postgres".'
