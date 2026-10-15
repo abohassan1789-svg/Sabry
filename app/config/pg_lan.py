@@ -51,10 +51,16 @@ def _fields(line: str) -> list[str]:
 
 
 def _local_method(hba_text: str) -> str:
+    """Password method for network computers: always a real password check.
+
+    Keeps ``md5`` when the local rule uses it (md5 rules also accept SCRAM
+    passwords); anything else, above all ``trust``, becomes ``scram-sha-256`` so
+    the network never gets in without a password.
+    """
     for line in hba_text.splitlines():
         f = _fields(line)
-        if len(f) >= 5 and f[0] == "host" and f[3] == "127.0.0.1/32":
-            return f[4]
+        if len(f) >= 5 and f[0] == "host" and f[3] == "127.0.0.1/32" and f[4] == "md5":
+            return "md5"
     return "scram-sha-256"
 
 
@@ -124,7 +130,7 @@ def _rewrite(path: Path, edit: Callable[[str], "tuple[str, bool]"], stamp: str) 
 
 
 def enable_lan(data_dir: Path, port: int, services: dict[str, str], run: Runner,
-               stamp: str) -> dict:
+               stamp: str, live_listen: str | None = None) -> dict:
     data_dir = Path(data_dir)
     conf, hba = data_dir / "postgresql.conf", data_dir / "pg_hba.conf"
     if not conf.exists() or not hba.exists():
@@ -138,7 +144,11 @@ def enable_lan(data_dir: Path, port: int, services: dict[str, str], run: Runner,
     steps.append("listen_addresses set to '*'" if conf_changed else "listen_addresses already '*'")
     hba_changed = _rewrite(hba, ensure_samenet_rule, stamp)
     steps.append("samenet rule added" if hba_changed else "samenet rule already present")
-    if conf_changed or hba_changed:
+    # live_listen is the server's current listen_addresses: when an earlier
+    # attempt edited the files but its restart failed, the files look done yet
+    # the server is still local-only, so restart anyway.
+    not_live = live_listen is not None and live_listen.strip() != "*"
+    if conf_changed or hba_changed or not_live:
         code, out = run(["powershell", "-NoProfile", "-Command",
                          f"Restart-Service -Name '{service}' -Force"])
         if code != 0:

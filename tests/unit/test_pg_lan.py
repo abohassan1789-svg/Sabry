@@ -103,3 +103,63 @@ def test_cli_enable_lan_with_data_dir(tmp_path, monkeypatch):
     data = json.loads(out.read_text(encoding="utf-8-sig"))
     assert code == 0 and data["ok"], data
     assert "samenet" in (tmp_path / "pg_hba.conf").read_text()
+
+
+def test_samenet_rule_never_copies_trust_or_local_only_methods():
+    for local in ("trust", "sspi", "ident", "peer"):
+        text, _ = pg_lan.ensure_samenet_rule(HBA.replace("scram-sha-256", local))
+        assert text.splitlines()[-1].split()[-1] == "scram-sha-256", local
+
+
+def test_enable_lan_restarts_when_setting_is_not_live_yet(tmp_path):
+    services = _setup(tmp_path)
+    ok_run = lambda c: (1, "") if "show" in c else (0, "")
+    pg_lan.enable_lan(tmp_path, 5432, services, ok_run, stamp="1")
+    calls = []
+
+    def run(cmd):
+        calls.append(cmd)
+        return (0, "")
+
+    # Files already changed by the first run, but the server still listens on
+    # localhost only (e.g. the first restart failed): a retry must restart.
+    result = pg_lan.enable_lan(tmp_path, 5432, services, run, stamp="2", live_listen="localhost")
+    assert result["ok"]
+    assert any("Restart-Service" in " ".join(c) for c in calls)
+
+
+def test_cli_enable_lan_reloads_config_after_success(tmp_path, monkeypatch):
+    import json
+
+    import psycopg
+
+    from app.config import configure_cli
+
+    services = _setup(tmp_path)
+    monkeypatch.setattr(pg_lan, "list_pg_services", lambda: services)
+    monkeypatch.setattr(pg_lan, "default_runner",
+                        lambda cmd: (1, "") if "show" in cmd else (0, ""))
+    executed = []
+
+    class _Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def execute(self, sql, *a):
+            executed.append(sql)
+            value = {"SHOW data_directory": str(tmp_path),
+                     "SHOW listen_addresses": "*"}.get(sql, True)
+
+            class _Cur:
+                def fetchone(self_inner):
+                    return (value,)
+            return _Cur()
+
+    monkeypatch.setattr(psycopg, "connect", lambda *a, **k: _Conn())
+    out = tmp_path / "r.json"
+    code = configure_cli.main(["--result-file", str(out), "enable-lan", "--port", "5432"])
+    assert code == 0, out.read_text(encoding="utf-8-sig")
+    assert "SELECT pg_reload_conf()" in executed

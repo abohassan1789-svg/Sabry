@@ -280,20 +280,34 @@ def _cmd_enable_lan(args) -> int:
 
     from app.config import pg_lan
 
-    data_dir = args.data_dir
-    if not data_dir:
-        import psycopg
+    import psycopg
 
-        password = _resolve_password(args)
+    password = _resolve_password(args)
+    conn_kwargs = dict(host=args.host, port=args.port, dbname="postgres", user=args.user,
+                       password=password, connect_timeout=10)
+    data_dir = args.data_dir
+    live_listen = None
+    if not data_dir:
         try:
-            with psycopg.connect(host=args.host, port=args.port, dbname="postgres",
-                                 user=args.user, password=password, connect_timeout=10) as conn:
+            with psycopg.connect(**conn_kwargs) as conn:
                 data_dir = conn.execute("SHOW data_directory").fetchone()[0]
+                live_listen = conn.execute("SHOW listen_addresses").fetchone()[0]
         except Exception as exc:  # noqa: BLE001
             return _emit({"ok": False, "message": _scrub(f"{type(exc).__name__}: {exc}",
                                                          password)}, ok=False)
     result = pg_lan.enable_lan(Path(data_dir), args.port, pg_lan.list_pg_services(),
-                               pg_lan.default_runner, datetime.now().strftime("%Y%m%d%H%M%S"))
+                               pg_lan.default_runner, datetime.now().strftime("%Y%m%d%H%M%S"),
+                               live_listen=live_listen)
+    if result.get("ok") and not args.data_dir:
+        # Load the pg_hba.conf rule even when no restart was needed this time.
+        try:
+            with psycopg.connect(**conn_kwargs) as conn:
+                conn.execute("SELECT pg_reload_conf()").fetchone()
+            result.setdefault("steps", []).append("configuration reloaded")
+        except Exception as exc:  # noqa: BLE001
+            return _emit({"ok": False, "steps": result.get("steps", []),
+                          "message": _scrub(f"Could not reload the configuration: {exc}",
+                                            password)}, ok=False)
     return _emit(result, ok=bool(result.get("ok")))
 
 
