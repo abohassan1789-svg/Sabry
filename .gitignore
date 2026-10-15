@@ -43,3 +43,4 @@ setup/dist/
 setup/Output/
 !setup/ahcode.spec
 !setup/dbcheck.spec
+setup/A-H Code/
