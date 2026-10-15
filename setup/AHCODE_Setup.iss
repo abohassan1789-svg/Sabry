@@ -67,6 +67,7 @@ var
   TestedKey: String;
   DbMissing: Boolean;
   LogFile: String;
+  FailedSteps: String;
 
 procedure Log2(const Line: String);
 var Lines: TArrayOfString;
@@ -357,14 +358,39 @@ var Msg, Output, PassFile: String; Answer: Integer;
 begin
   repeat
     WizardForm.StatusLabel.Caption := Title + '...';
-    PassFile := WritePasswordFile();
-    Result := RunTool(ExpandConstant('{app}\{#CfgExe}'),
-                      StringChangeEx2(Params, '%PASS%', PassFile), Title, Msg, Output);
-    DeleteFile(PassFile);
+    if ExpandConstant('{param:TESTFAILSTEP|}') = Title then
+    begin
+      { Test seam for the end-to-end test: make this one step fail. }
+      Result := False;
+      Msg := 'Forced failure (TESTFAILSTEP).';
+      Log2(Title + ': FAILED - ' + Msg);
+    end
+    else
+    begin
+      PassFile := WritePasswordFile();
+      Result := RunTool(ExpandConstant('{app}\{#CfgExe}'),
+                        StringChangeEx2(Params, '%PASS%', PassFile), Title, Msg, Output);
+      DeleteFile(PassFile);
+    end;
     if Result then Exit;
     Answer := SuppressibleMsgBox(Title + ' failed:' + #13#10#13#10 + Msg + #13#10#13#10 +
       'Log: ' + LogFile, mbError, MB_RETRYCANCEL, IDCANCEL);
   until Answer <> IDRETRY;
+  FailedSteps := FailedSteps + #13#10 + '  - ' + Title;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if (CurPageID = wpFinished) and (FailedSteps <> '') then
+    WizardForm.FinishedLabel.Caption :=
+      'A-H CODE was installed, but these steps did not finish:' + FailedSteps + #13#10#13#10 +
+      'Fix the cause (see the log below), then run this setup again.' + #13#10 + LogFile;
+end;
+
+{ A silent install that had a failed step must not report success. }
+function GetCustomSetupExitCode(): Integer;
+begin
+  if FailedSteps <> '' then Result := 10 else Result := 0;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);

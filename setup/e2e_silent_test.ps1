@@ -50,6 +50,12 @@ try {
     $u = Start-Process "$Dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait -PassThru
     if (Test-Path $Dir) { throw "Uninstall left files: $((Get-ChildItem $Dir -Recurse -File | Select-Object -First 3).FullName -join ', ')" }
     if (-not (Test-Path $Profile)) { throw "Uninstall removed the connection file" }
+    # A failed post-install step must not look like success: exit code 10.
+    $p = Start-Process $Exe -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART",
+        "/DIR=`"$Dir`"", "/DBNAME=$Db", "/DBPASSFILE=`"$PasswordFile`"", "/LAN=0", "/BACKUPDIR=`"$Bk`"",
+        "/TESTFAILSTEP=`"Saving the backup folder`"" -Wait -PassThru
+    if ($p.ExitCode -ne 10) { throw "Failed step not reported (exit $($p.ExitCode), expected 10)" }
+    $u = Start-Process "$Dir\unins000.exe" -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES" -Wait -PassThru
     Write-Host "E2E PASSED" -ForegroundColor Green
 }
 finally {
