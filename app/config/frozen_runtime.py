@@ -19,17 +19,17 @@ from app.config.connection_config import BRAND_DIRNAME
 
 
 def prepare(environ: MutableMapping[str, str] | None = None,
-            program_data: str | None = None, chdir: bool = True) -> Path:
+            program_data: str | None = None) -> Path:
     env = os.environ if environ is None else environ
     root = program_data or env.get("ProgramData") or os.environ.get("ProgramData") \
         or str(Path.home())
     base = Path(root) / BRAND_DIRNAME
     base.mkdir(parents=True, exist_ok=True)
     env.setdefault("BACKUP_SETTINGS_PATH", str(base / "backup_settings.json"))
-    if chdir:
-        # Settings files opened by a relative name (e.g. the daily follow-up
-        # report settings) land in the data folder, not the install folder.
-        os.chdir(base)
+    # The data folder is writable by every user, so the process never runs from
+    # it, and Windows is told not to search the current folder for programs
+    # (pg_dump): a planted .exe there can never run with another user's rights.
+    env.setdefault("NoDefaultCurrentDirectoryInExePath", "1")
     return base
 
 

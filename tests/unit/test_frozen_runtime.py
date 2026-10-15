@@ -12,13 +12,30 @@ def test_prepare_routes_writable_files_to_programdata(tmp_path, monkeypatch):
     assert base == tmp_path / "PD" / "PHASEINV2"
     assert base.is_dir()
     assert env["BACKUP_SETTINGS_PATH"] == str(base / "backup_settings.json")
-    assert os.getcwd() == str(base)
+    # Never run from the users-writable data folder: a planted pg_dump.exe or
+    # .env there must not be picked up (cwd is searched first on Windows).
+    assert os.getcwd() == str(tmp_path)
+    assert env["NoDefaultCurrentDirectoryInExePath"] == "1"
+
+
+def test_frozen_build_ignores_dotenv_in_cwd(tmp_path, monkeypatch):
+    import sys
+
+    from app.config import settings as settings_mod
+
+    (tmp_path / ".env").write_text("DB_NAME=PLANTED\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("DB_NAME", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(settings_mod, "_load_profile", lambda: None)
+    assert settings_mod.get_settings().db_name == "crm"
+    assert "DB_NAME" not in os.environ
 
 
 def test_prepare_keeps_explicit_overrides(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     env = {"BACKUP_SETTINGS_PATH": "X:/mine.json"}
-    frozen_runtime.prepare(env, program_data=str(tmp_path), chdir=False)
+    frozen_runtime.prepare(env, program_data=str(tmp_path))
     assert env["BACKUP_SETTINGS_PATH"] == "X:/mine.json"
     assert os.getcwd() == str(tmp_path)
 

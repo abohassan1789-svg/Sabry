@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import os
+import sys
 
 try:
     from dotenv import load_dotenv
@@ -31,7 +32,9 @@ def get_settings() -> Settings:
     This keeps the existing ``.env`` workflow working while letting an installed
     machine drive its connection from the encrypted profile without edits here.
     """
-    if load_dotenv is not None:
+    # The installed build never reads a .env: its settings come from the
+    # encrypted profile, and a .env in a users-writable folder could redirect it.
+    if load_dotenv is not None and not getattr(sys, "frozen", False):
         load_dotenv()
 
     # Environment / defaults baseline.
