@@ -329,12 +329,16 @@ _SECTION_ITEM_ACTIVE = (
 )
 
 
+# Product name shown in the main window title (matches the installer).
+APP_TITLE = "A-H CODE"
+
+
 class ReviewMainWindow(QMainWindow):
     """Main shell: sidebar menu that opens each screen in its own window."""
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("KSA")
+        self.setWindowTitle(APP_TITLE)
         self.resize(1500, 850)
         self.setMinimumSize(1000, 640)
         self.setLayoutDirection(Qt.RightToLeft)
