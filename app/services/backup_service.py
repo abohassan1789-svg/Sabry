@@ -92,10 +92,26 @@ class BackupService:
         dump_runner: DumpRunner | None = None,
     ) -> None:
         self.repository = repository or BackupRepository()
+        settings_from_env = os.getenv("BACKUP_SETTINGS_PATH")
+        self.settings_path = Path(
+            settings_path
+            or settings_from_env
+            or (_APP_ROOT / "backup_settings.json")
+        )
+        # Folder order: explicit argument, BACKUP_DIR, the folder the installer
+        # recorded in backup_settings.json, then the default. An installed copy
+        # (BACKUP_SETTINGS_PATH points into ProgramData) defaults next to that
+        # file, never under Program Files where normal users cannot write.
+        default_dir = (
+            Path(settings_from_env).parent / BACKUP_DIR_NAME
+            if settings_from_env and not settings_path
+            else _APP_ROOT / BACKUP_DIR_NAME
+        )
         self.backup_dir = str(
             backup_dir
             or os.getenv("BACKUP_DIR")
-            or (_APP_ROOT / BACKUP_DIR_NAME)
+            or self._stored_backup_dir()
+            or default_dir
         )
         # Locate the pg_dump binary. An explicit path (constructor arg or the
         # PG_DUMP_PATH env var) always wins; otherwise we auto-discover it — on
@@ -103,12 +119,16 @@ class BackupService:
         # feature works out of the box even when PostgreSQL's bin is not on PATH.
         explicit = pg_dump_path or os.getenv("PG_DUMP_PATH")
         self.pg_dump_path = explicit or self._discover_pg_dump()
-        self.settings_path = Path(
-            settings_path
-            or os.getenv("BACKUP_SETTINGS_PATH")
-            or (_APP_ROOT / "backup_settings.json")
-        )
         self._dump_runner = dump_runner or _default_dump_runner
+
+    def _stored_backup_dir(self) -> str:
+        """``backup_dir`` from backup_settings.json (written by the installer), or ""."""
+        try:
+            stored = json.loads(self.settings_path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            return ""
+        value = stored.get("backup_dir") if isinstance(stored, dict) else None
+        return str(value).strip() if value else ""
 
     # --- pg_dump discovery --------------------------------------------------
     @staticmethod
