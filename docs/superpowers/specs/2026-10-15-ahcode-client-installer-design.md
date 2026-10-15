@@ -57,6 +57,10 @@ One PyInstaller analysis, two executables sharing one `_internal` folder:
 - `ahcode-config.exe` (console, run hidden by the wizard) — entry
   `setup/entry_config.py`, runs `app.config.configure_cli.main`.
 
+A third, tiny one-file tool `ahcode-dbcheck.exe` (only `network_service` and
+psycopg) is embedded in the setup and extracted to `{tmp}`, because the wizard
+must test the connection before the program files are copied.
+
 Bundled data: `app/database/**/*.sql`, `app/ui/assets/**`, the `assets/`
 images the app loads, qtawesome fonts, and PySide6 QtWebEngine (the contracting
 report preview/print uses it). Hidden imports are gathered with
@@ -83,7 +87,8 @@ Wizard pages, in order:
 3. **Database Connection** — same layout and help text as the screenshot:
    `Server IP / Host` = `localhost`, `Port` = `5432`, `Database Name` =
    `SABCONTDB`, `User` = `postgres`, `Password` (empty, masked).
-   A `Test Connection` button calls `ahcode-config.exe test-db`. When the host
+   A `Test Connection` button calls `ahcode-dbcheck.exe` (pressing `Next`
+   runs the same test automatically). When the host
    is `localhost` and the database is missing, a reachable server counts as a
    pass (the database is created later). `Next` is blocked until a test passes
    with the current values; editing any field resets the pass.
@@ -140,8 +145,9 @@ for a non-local host; `provision` still runs (safe no-op on an existing schema).
 ### 8. Upgrade and uninstall
 
 - Fixed `AppId` GUID, so running a newer setup upgrades in place. On upgrade
-  the Database Connection page is pre-filled from the existing profile (the
-  password is required again only if the test fails).
+  the wizard pre-fills host, port, database, user, the LAN choice and the
+  backup folder from the previous install; the password is typed again so the
+  connection can be re-tested.
 - Uninstall removes `{app}` and shortcuts only. `ProgramData\PHASEINV2`,
   the database and backups are never removed.
 
