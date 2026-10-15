@@ -27,14 +27,14 @@ import os
 import sys
 from pathlib import Path
 
+from app.config import cli_output
 from app.config import connection_config as cc
 from app.services import network_service as net
 
 
 def _emit(obj: dict, ok: bool) -> int:
     """Print JSON and return a shell exit code."""
-    print(json.dumps(obj, ensure_ascii=False))
-    return 0 if ok else 1
+    return cli_output.emit(obj, ok)
 
 
 def _resolve_password(args) -> str:
@@ -47,7 +47,7 @@ def _resolve_password(args) -> str:
     pw_file = getattr(args, "password_file", "") or ""
     if pw_file:
         try:
-            return Path(pw_file).read_text(encoding="utf-8").rstrip("\r\n")
+            return Path(pw_file).read_text(encoding="utf-8-sig").rstrip("\r\n")
         except OSError:
             return ""
     env_pw = os.environ.get("CRM_DB_PASSWORD")
@@ -67,11 +67,19 @@ def _cmd_check_port(args) -> int:
 
 
 def _cmd_test_db(args) -> int:
-    result = net.test_database(
-        host=args.host, port=args.port, db_name=args.db,
-        user=args.user, password=_resolve_password(args), sslmode=args.sslmode,
-    )
-    return _emit({"ok": result.ok, "message": result.message, "detail": result.detail}, result.ok)
+    password = _resolve_password(args)
+    if getattr(args, "allow_missing_db", False):
+        result, missing = net.test_database_or_server(
+            args.host, args.port, args.db, args.user, password, sslmode=args.sslmode)
+    else:
+        result = net.test_database(
+            host=args.host, port=args.port, db_name=args.db,
+            user=args.user, password=password, sslmode=args.sslmode,
+        )
+        missing = False
+    return _emit({"ok": result.ok, "db_missing": missing,
+                  "message": _scrub(result.message, password),
+                  "detail": _scrub(result.detail, password)}, result.ok)
 
 
 def _scrub(text: str, password: str) -> str:
@@ -266,6 +274,8 @@ def _cmd_set_backup_dir(args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="configure_cli", description="CRM server configuration bridge")
+    parser.add_argument("--result-file", dest="result_file", default="",
+                        help="Also write the JSON result to this file (UTF-8 with BOM)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_bdir = sub.add_parser("set-backup-dir", help="Record the chosen backup folder (merged)")
@@ -287,6 +297,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_db.add_argument("--password-file", dest="password_file", default="",
                       help="Read the password from this file instead of the command line")
     p_db.add_argument("--sslmode", default="prefer")
+    p_db.add_argument("--allow-missing-db", dest="allow_missing_db", action="store_true",
+                      help="Pass when only the database is missing but the server is reachable")
 
     p_cdb = sub.add_parser("create-db", help="Create the app database only if it is missing")
     p_cdb.add_argument("--host", required=True)
@@ -340,6 +352,7 @@ _COMMANDS = {
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    cli_output.set_result_file(args.result_file)
     try:
         return _COMMANDS[args.command](args)
     except Exception as exc:  # never leak a traceback to the installer

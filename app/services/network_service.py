@@ -185,3 +185,35 @@ def test_database(
         return CheckResult(True, f"Connected to database '{db_name}' on {host}:{port}.")
     except Exception as exc:  # psycopg.OperationalError and friends
         return CheckResult(False, f"Database connection failed: {exc}", detail=str(exc))
+
+
+def _is_missing_database(text: str) -> bool:
+    lowered = (text or "").lower()
+    return "database" in lowered and "does not exist" in lowered
+
+
+def test_database_or_server(
+    host: str,
+    port: int,
+    db_name: str,
+    user: str,
+    password: str,
+    sslmode: str = "prefer",
+    maintenance_db: str = "postgres",
+) -> tuple[CheckResult, bool]:
+    """Test ``db_name``; if only the database is missing, test the server instead.
+
+    Returns ``(result, db_missing)``. Used on the main machine, where the
+    installer creates the database after the test, so a reachable server with
+    valid credentials is a pass.
+    """
+    result = test_database(host, port, db_name, user, password, sslmode=sslmode)
+    if result.ok or not _is_missing_database(result.detail or result.message):
+        return result, False
+    server = test_database(host, port, maintenance_db, user, password, sslmode=sslmode)
+    if server.ok:
+        return CheckResult(
+            True,
+            f"Server {host}:{port} reachable; database '{db_name}' will be created.",
+        ), True
+    return server, True
