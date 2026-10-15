@@ -272,6 +272,28 @@ def _cmd_set_backup_dir(args) -> int:
     )
 
 
+def _cmd_enable_lan(args) -> int:
+    from datetime import datetime
+
+    from app.config import pg_lan
+
+    data_dir = args.data_dir
+    if not data_dir:
+        import psycopg
+
+        password = _resolve_password(args)
+        try:
+            with psycopg.connect(host=args.host, port=args.port, dbname="postgres",
+                                 user=args.user, password=password, connect_timeout=10) as conn:
+                data_dir = conn.execute("SHOW data_directory").fetchone()[0]
+        except Exception as exc:  # noqa: BLE001
+            return _emit({"ok": False, "message": _scrub(f"{type(exc).__name__}: {exc}",
+                                                         password)}, ok=False)
+    result = pg_lan.enable_lan(Path(data_dir), args.port, pg_lan.list_pg_services(),
+                               pg_lan.default_runner, datetime.now().strftime("%Y%m%d%H%M%S"))
+    return _emit(result, ok=bool(result.get("ok")))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="configure_cli", description="CRM server configuration bridge")
     parser.add_argument("--result-file", dest="result_file", default="",
@@ -336,6 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_w.add_argument("--ssl-cert", dest="ssl_cert", default="")
     p_w.add_argument("--out", default="")
     p_w.add_argument("--export-client", dest="export_client", default="")
+    p_lan = sub.add_parser("enable-lan", help="Let computers on the same network connect")
+    p_lan.add_argument("--host", default="localhost")
+    p_lan.add_argument("--port", type=int, default=cc.DEFAULT_PORT)
+    p_lan.add_argument("--user", default="postgres")
+    p_lan.add_argument("--password", default="")
+    p_lan.add_argument("--password-file", dest="password_file", default="")
+    p_lan.add_argument("--data-dir", dest="data_dir", default="")
     return parser
 
 
@@ -347,6 +376,7 @@ _COMMANDS = {
     "provision": _cmd_provision,
     "write": _cmd_write,
     "set-backup-dir": _cmd_set_backup_dir,
+    "enable-lan": _cmd_enable_lan,
 }
 
 
